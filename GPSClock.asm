@@ -4,6 +4,8 @@
 // Permanent DST / use jumper for manual DST control
 // #define NO_DST
 //////////////
+// Disable blinking colons
+// #define DISABLE_BLINKING_ENTIRELY
 // 
 // #define BASE_TZ_OFFSET     0
 // #define FRACTIONAL_OFFSET 45
@@ -16,11 +18,13 @@
 /*
 Pin Configurations:
 
+ATTINY2313
+
 1   RESET
 2   PD0 GPS_DATA
 3   PD1 - [UTC Mode with Crystal]
-4   PA1 [ XTAL ] UTC Mode
-5   PA0 [ XTAL ] PermaDST
+4   PA1 [ XTAL ] UTC Mode (without crystal)
+5   PA0 [ XTAL ] PermaDST (without crystal)
 6   PD2 PPS
 7   PD3 - [PermaDST with Crystal]
 8   PD4 -
@@ -37,7 +41,37 @@ Pin Configurations:
 18  PB6 -
 19  PB7 -
 20  VCC
+
+
+
+MAX7219 decimal point wiring
+
+time H/M colon: deciseconds
+time M/S colon: centiseconds
+date Y-M hyphen: 1 year
+date M-D hyphen: 1 month
+GMT indicator: 10 day
+BST indicator: 1 day
+seconds decimal: 1 second
 */
+
+// PortB output pins
+#define PORTB_SPI_DATA          0
+#define PORTB_SPI_CLK           1
+#define PORTB_LD_TIME           2
+#define PORTB_LD_DATE           3
+
+// PortD input pins
+#define PORTD_UTC_XTAL          1
+#define PORTD_PPS_IN            2
+#define PORTD_PERMADST_XTAL     3
+#define PORTD_DISPLAYTEST       5
+#define PORTD_DST_EN            6
+
+// PortA input pins
+#define PORTA_PERMADST_NOXTAL   0
+#define PORTA_UTC_NOXTAL        1
+
 
 
 
@@ -63,7 +97,11 @@ Pin Configurations:
 #define FOURTH_SUNDAY                106
 #define THIRD_SUNDAY                 107
 
+// GPS only includes a two-digit year so we have to make some assumptions.  Fix this in ~75 years.
+#define THOUSAND_YEAR 2
+#define HUNDRED_YEAR  0
 
+// Define timezone details
 #ifdef TZ_LONDON
   #define BASE_TZ_OFFSET     0
   #define DST_START_MONTH    MARCH
@@ -263,8 +301,11 @@ Pin Configurations:
 #endif
 
 
-// Register declarations
+; -----------------------------------------------------------------------------
+; Declare registers and memory locations
+; -----------------------------------------------------------------------------
 
+// Not using X/Y pointers, just use these as normal registers.
 .undef XH
 .undef XL
 .undef YH
@@ -314,8 +355,9 @@ tenMonths: .byte 1
 years: .byte 1
 tenYears: .byte 1
 
+// TODO: Learn what these are
 fix: .byte 1
-fixDisplay: .byte 1
+fixDisplay: .byte 1     ; Controls whether colons are on or off
 dataValid: .byte 1
 
 
@@ -368,11 +410,10 @@ ADC_CONV:
 prog_start:
 */
 
-// I think these are supposed to be some interrupt service routines?
-// TODO: See if there are interrupts set up
-// Yes, there are.
-        // Enable interrupt on TC1A output compare match
-        // Rising edge of INT0 generates an interrupt request (PPS signal)
+// TODO: See if we can put in standard ISR vector definition block above.  Need to confirm which ISRs are being called and set jumps correctly.
+    // Reset (jump to init)
+    // Enable interrupt on TC1A output compare match (run rollover section at 100Hz)
+    // Rising edge of INT0 generates an interrupt request (PPS signal) (jump to timingAdjust)
 
 ; Reset handler
 rjmp init
@@ -393,15 +434,15 @@ in r15,SREG
 
 ; Timer1 overflow handler??
 rollover:
-    // Rollover gets called at 10Hz (whenever hundredths digit counts past nine)
-    // - Cascades up from least to most significant digit, rolling nines to zeros
-    // - Exit/return when it reaches a digit that doesn't need rolling over.
+    // Rollover gets called at 100Hz (every time the display needs updating)
+    // Starts by incrementing CentiSeconds then cascades up from least to most significant digit, rolling nines to zeros.
+    // Exit/return when it reaches a digit that doesn't need rolling over.
     inc dCentiSeconds
     cpi dCentiSeconds, 10
     breq overflow1
     
     ldi r18, $01
-    lds r19, fixDisplay
+    lds r19, fixDisplay     ; Pre-load M/S colon state (driven from centiseconds)
     eor r19, dCentiSeconds
     ;sbrs dSeconds,0
     ;ori r19,0b10000000
@@ -411,12 +452,13 @@ rollover:
     reti
 
 overflow1:
-    lds r19, fix
-    sts fixDisplay, r19
+    // 1/100 seconds digit 9 -> 0 (10Hz)
+    lds r19, fix            ; Update fixDisplay from 'fix' value.  fix is alternated every second in timingAdjust routine (when PPS signal present)
+    sts fixDisplay, r19     ; Save back to fixDisplay memory location (this is the only place it gets set)
 
     clr dCentiSeconds
     ldi r18,$01
-    eor r19,dCentiSeconds
+    eor r19,dCentiSeconds   ; Combine centiseconds with pre-loaded fixDisplay in R19 for M/S colon state
     ;sbrs dSeconds,0
     ;ori r19,0b10000000
     rcall shiftTime
@@ -426,7 +468,7 @@ overflow1:
     breq overflow2
 
     ldi r18,$02
-    lds r19,fixDisplay
+    lds r19,fixDisplay      ; Pre-load H/M colon state (driven from deciseconds)
     eor r19,dDeciSeconds
     ;sbrs dSeconds,0
     ;ori r19,0b10000000
@@ -436,9 +478,10 @@ overflow1:
     reti
 
 overflow2:
+    // 1/10 seconds digit 9 -> 0 (1Hz)
     clr dDeciSeconds
     ldi r18,$02
-    lds r19,fixDisplay
+    lds r19,fixDisplay      ; Pre-load H/M colon state (driven from deciseconds)
     eor r19,dDeciSeconds
     ; sbrs dSeconds,0
     ; ori r19,0b10000000
@@ -579,7 +622,7 @@ overflow8:
     
     ldi r18,$01
     mov r19,dDays
-or r19,dBST
+    or r19,dBST         ; Include BST indicator state (driven by 1 day decimal point)
     rcall shiftDate
 
     out SREG,r15
@@ -590,13 +633,13 @@ overflow9:
     clr dDays
     ldi r18,$01
     mov r19,dDays
-or r19,dBST
+    or r19,dBST
     rcall shiftDate
 
     inc dTenDays
     ldi r18,$02
     mov r19,dTenDays
-or r19,dGMT
+    or r19,dGMT         ; Include GMT indicator state (driven by 10 day decimal point)
     rcall shiftDate
 
     out SREG,r15
@@ -609,11 +652,11 @@ overflow10:
     ldi r18,$01
     mov dDays,r18  ; load dDays 1
     mov r19,dDays
-or r19,dBST
+    or r19,dBST
     rcall shiftDate
     ldi r18,$02
     mov r19,dTenDays
-or r19,dGMT
+    or r19,dGMT
     rcall shiftDate
 
     ldi r18,1
@@ -690,8 +733,6 @@ overflow13:
     out SREG,r15
     reti
 
-// What happens when the decade rolls over?  Does dTenYears have special handling like 2020's being stored as "202"?
-
 
 ; -----------------------------------------------------------------------------
 ;   INIT SECTION
@@ -737,21 +778,23 @@ init:
     out GIMSK,r16
 
     // Setup I/O pins
-    ldi r16,0b00001111
+    // Port B outputs to MAX7219
+    ldi r16, (1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)
     out DDRB,r16
     ldi r16,0
     out PORTB,r16
-
+    // Set Port A and Port D to all input
     out DDRD,r16
     out DDRA,r16
 
+    // Enable pullups on inputs (DDRxn=0, PORTxn=1)
     #ifdef USE_CRYSTAL
-        ldi r16, 1<<6 | 1<<5 | 1<<1 | 1<<3
+        ldi r16, (1<<PORTD_UTC_XTAL | 1<<PORTD_PERMADST_XTAL | 1<<PORTD_DISPLAYTEST | 1<<PORTD_DST_EN)
         out PORTD,r16
     #else
-        ldi r16, 1<<6 | 1<<5
+        ldi r16, (1<<PORTD_DISPLAYTEST | 1<<PORTD_DST_EN)
         out PORTD,r16
-        ldi r16, 1<<0 | 1<<1
+        ldi r16, (1<<PORTA_PERMADST_NOXTAL | 1<<PORTA_UTC_NOXTAL)
         out PORTA, r16
     #endif
 
@@ -766,43 +809,43 @@ init:
     out UCSRB,r16
 
     // N-8-1
-    ldi r16,(1<<UCSZ1|1<<UCSZ0)
+    ldi r16,(1<<UCSZ1 | 1<<UCSZ0)
     out UCSRC,r16
 
-    // Initialize display
-    ldi r18,$09 ;Decode mode
-    ldi r19,$FF ;Code B all digits
+    // Initialize MAX7219
+    ldi r18,$09 ; Decode mode
+    ldi r19,$FF ; Code B all digits (BCD)
     rcall shiftBoth
 
-    ldi r18,$0A ;Intensity
-    ldi r19,$0F
+    ldi r18,$0A ; Intensity
+    ldi r19,$0F ; Max
     rcall shiftBoth
 
-    ldi r18,$0B ;Scan Limit
-    ldi r19,$07 ;3 digits
+    ldi r18,$0B ; Scan Limit
+    ldi r19,$07 ; 8 digits
     rcall shiftBoth
 
-    ldi r18,$FF ;Display test
-    ldi r19,$00
-    sbis PIND,5
-        inc r19
+    ldi r18,$FF ; Display test
+    ldi r19,$00 ; Off
+    sbis PIND, PORTD_DISPLAYTEST
+        inc r19 ; On
     rcall shiftBoth
 
-    ldi r18,$0C ;Shutdown
-    ldi r19,$01 ;Normal operation
+    ldi r18,$0C ; Shutdown/normal
+    ldi r19,$01 ; Normal operation
     rcall shiftBoth
 
-    // Zero out digit values in memory
+    // Zero out digit registers
     clr dTenHours
     clr dHours
     clr dTenMinutes
     clr dMinutes
     clr dTenSeconds
-    ldi dSeconds, 0b10000000
+    ldi dSeconds, 0b10000000    ; Seconds get decimal point set
     clr dDeciSeconds
     clr dCentiSeconds
 
-    // Output date digits (?)
+    // Initialize date display (all dashes)
     ldi r18,$08
     ldi r19,10
     rcall shiftDate
@@ -813,24 +856,24 @@ init:
     ldi r19,10
     rcall shiftDate
     ldi r18,$05
-    ldi r19,10 +0b10000000
+    ldi r19,10 +0b10000000  ; Year gets decimal point set for Y-M dash
     rcall shiftDate
     ldi r18,$04
     ldi r19,10
     rcall shiftDate
     ldi r18,$03
-    ldi r19,10 +0b10000000
+    ldi r19,10 +0b10000000  ; Month gets decimal point set for M-D dash
     rcall shiftDate
     ldi r18,$02
     ldi r19,10
-;or r19,dGMT
+    ;or r19,dGMT
     rcall shiftDate
     ldi r18,$01
     ldi r19,10
-;or r19,dBST
+    ;or r19,dBST
     rcall shiftDate
 
-    // Output time digits (?)
+    // Initialize time display (all dashes)
     ldi r18,$08
     ldi r19,10
     rcall shiftTime
@@ -927,7 +970,9 @@ main:
         // Looking for GPRMC message, everything else will jump back to main and restart matching.
         // Example message:
         // $GPRMC,203522.00,A,5109.0262308,N,11401.8407342,W,0.004,133.4,130522,0.0,E,D*2B
-        // *TIME*, status, lat, lat dir, lon, lon dir, speed, track, *DATE*, mag var, var dir, mode/checksum
+        // msg type, *TIME*, status, lat, lat dir, lon, lon dir, speed, track, *DATE*, mag var, var dir, mode/checksum
+
+        // Incoming numbers have their high nibble dropped to quickly convert ASCII back to their corresponding values (equivalent to subtracting 48)
 
         rcall receiveByte
         cpi r20, '$'
@@ -955,7 +1000,7 @@ main:
 
         rcall receiveByte
 
-        // Receive time from GPS
+        // Receive time from GPS (hhmmss.ss)
         rcall receiveByte
         cpi r20, ','
         breq main
@@ -998,7 +1043,7 @@ main:
         // Check position status byte (A = data valid)
         rcall receiveByte
         cpi r20, 'A'
-        brne dataNotValid
+        brne dataNotValid   ; Don't start colons blinking until the first time a valid fix is received
     
         // This blinks the colons on a valid GPS fix
         #ifndef DISABLE_BLINKING_ENTIRELY
@@ -1017,7 +1062,7 @@ main:
         rcall waitForComma    ; speed
         rcall waitForComma    ; course
     
-        // Receive date from GPS
+        // Receive date from GPS (ddmmyy)
         rcall receiveByte
         andi r20,$0F
         sts tenDays,r20
@@ -1031,9 +1076,9 @@ main:
         sts tenMonths,r20
 
         ldi r21,10
-        clr fullMonths
+        clr fullMonths      ; fullMonths holds the actual month value (10*tenMonths + 1*months)
         sbrc r20,0
-        mov fullMonths,r21
+            mov fullMonths,r21
 
         rcall receiveByte
         andi r20,$0F
@@ -1045,7 +1090,7 @@ main:
         andi r20,$0F
         sts tenYears,r20
 
-        clr fullYears
+        clr fullYears       ; fullYears holds the actual (two-digit) year value (10*tenYears + 1*years)
         yearLoop:
         add fullYears,r21
         dec r20
@@ -1122,34 +1167,34 @@ main:
     lds dMinutes,minutes
     lds dTenSeconds,tenSeconds
     lds dSeconds,seconds
-;    lds dDeciSeconds,deciSeconds
-;    lds dCentiSeconds,centiSeconds
+    ;lds dDeciSeconds,deciSeconds
+    ;lds dCentiSeconds,centiSeconds
 
     // Adjust time offset based on control pins
 
     #ifdef USE_CRYSTAL
         // Alternate control pins if crystal fitted
         // Override timezone, just show UTC
-        sbis PIND,1
+        sbis PIND, PORTD_UTC_XTAL
             rjmp makeUTC
 
         // Backup perma-DST marker
-        sbis PIND,3
+        sbis PIND, PORTD_PERMADST_XTAL
             rjmp addHour
 
     #else
         // Standard control pins
         // Override timezone, just show UTC
-        sbis PINA,1
+        sbis PINA, PORTA_UTC_NOXTAL
         rjmp makeUTC
 
         // Backup perma-DST marker
-        sbis PINA,0
+        sbis PINA, PORTA_PERMADST_NOXTAL
         rjmp addHour
     #endif
 
     // DST enabled ?
-    sbic PIND,6
+    sbic PIND, PORTD_DST_EN
         rjmp sendAll
 
     #ifdef NO_DST
@@ -1512,10 +1557,10 @@ main:
 
         sendAll2:
         ldi r18,$08
-        ldi r19,2
+        ldi r19, THOUSAND_YEAR
         rcall shiftDate
         ldi r18,$07
-        ldi r19,0
+        ldi r19, HUNDRED_YEAR
         rcall shiftDate
         ldi r18,$06
         mov r19,dTenYears
@@ -1531,11 +1576,11 @@ main:
         rcall shiftDate
         ldi r18,$02
         mov r19,dTenDays
-    or r19,dGMT
+        or r19,dGMT
         rcall shiftDate
         ldi r18,$01
         mov r19,dDays
-    or r19,dBST
+        or r19,dBST
         rcall shiftDate
 
         ldi r18,$08
@@ -1792,10 +1837,10 @@ main:
         sendAll2:
 
         ldi r18,$08
-        ldi r19,2
+        ldi r19, THOUSAND_YEAR
         rcall shiftDate
         ldi r18,$07
-        ldi r19,0
+        ldi r19, HUNDRED_YEAR
         rcall shiftDate
         ldi r18,$06
         mov r19,dTenYears
@@ -1811,11 +1856,11 @@ main:
         rcall shiftDate
         ldi r18,$02
         mov r19,dTenDays
-    or r19,dGMT
+        or r19,dGMT
         rcall shiftDate
         ldi r18,$01
         mov r19,dDays
-    or r19,dBST
+        or r19,dBST
         rcall shiftDate
 
         ldi r18,$08
@@ -2003,10 +2048,10 @@ main:
         sendAll2:
 
         ldi r18,$08
-        ldi r19,2
+        ldi r19, THOUSAND_YEAR
         rcall shiftDate
         ldi r18,$07
-        ldi r19,0
+        ldi r19, HUNDRED_YEAR
         rcall shiftDate
         ldi r18,$06
         mov r19,dTenYears
@@ -2022,11 +2067,11 @@ main:
         rcall shiftDate
         ldi r18,$02
         mov r19,dTenDays
-    or r19,dGMT
+        or r19,dGMT
         rcall shiftDate
         ldi r18,$01
         mov r19,dDays
-    or r19,dBST
+        or r19,dBST
         rcall shiftDate
 
         ldi r18,$08
@@ -2088,7 +2133,7 @@ makeUTC:
 
 receiveByte:
     sbis UCSRA,RXC
-    rjmp receiveByte
+        rjmp receiveByte
     
     in r20,UDR
     ret
@@ -2102,91 +2147,92 @@ waitForComma:
 
 
 
-; max7219 is MSB first
+; MAX7219 is MSB first
+; Data packet is 4 bits nothing, 4 bits address, 8 bits data
+; Loads data on rising of LD pin (hold high to disable loading)
+; R18 is address byte (0-15)
+; R19 is data byte (BCD)
 shiftTime:
-    ; data is r18:r19
-    ldi r17,16
+    ldi r17, 16     ; 16 bits to output
     
     shiftTimeLoop:
-    cbi PORTB,1 ; clock low
-    ldi r16,0b00001000
-    sbrc r18,7
-    ori r16,1 ; data high 
-    out PORTB,r16
-    lsl r19
-    rol r18
-    nop
-    nop
-    sbi PORTB,1 ; clock high
-    nop
-    nop
+        cbi PORTB, PORTB_SPI_CLK    ; Clock low
+        ldi r16,(0<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)   ; Enable time load (low), disable date load (high)
+        sbrc r18, 7      ; Check next bit going out
+            ori r16, (1<<PORTB_SPI_DATA)    ; Set data high if next bit is high
+        out PORTB,r16   ; Send bit
+        lsl r19         ; Shift data byte left to get the next bit
+        rol r18         ; Shift address byte left to get the next bit (why is this not LSL as well?)
+        nop
+        nop
+        sbi PORTB, PORTB_SPI_CLK ; Clock high
+        nop
+        nop
 
-    dec r17
+        dec r17
     brne shiftTimeLoop
 
-    sbi PORTB,2 ;Load high
+    sbi PORTB, PORTB_LD_TIME    ; Set time load pin high to latch data
     nop
     nop
-    cbi PORTB,1 ; clock low
+    cbi PORTB, PORTB_SPI_CLK    ; Clock low
     nop
     nop
     ret
     
     
 shiftDate:
-    ; data is r18:r19
-    ldi r17,16
+    ldi r17,16      ; 16 bits to output
     shiftDateLoop:
-    cbi PORTB,1 ; clock low
-    ldi r16,0b00000100
-    sbrc r18,7
-    ori r16,1 ; data high 
-    out PORTB,r16
-    lsl r19
-    rol r18
-    nop
-    nop
-    sbi PORTB,1 ; clock high
-    nop
-    nop
+        cbi PORTB, PORTB_SPI_CLK    ; Clock low
+        ldi r16,(0<<PORTB_LD_DATE | 1<<PORTB_LD_TIME)   ; Enable date load (low), disable time load (high)
+        sbrc r18,7      ; Check next bit going out
+            ori r16, (1<<PORTB_SPI_DATA)    ; Set data high if next bit is high
+        out PORTB,r16   ; Send bit
+        lsl r19         ; Shift data byte left to get the next bit
+        rol r18         ; Shift address byte left to get the next bit
+        nop
+        nop
+        sbi PORTB, PORTB_SPI_CLK ; Clock high
+        nop
+        nop
 
-    dec r17
+        dec r17
     brne shiftDateLoop
 
-    sbi PORTB,3 ;Load high
+    sbi PORTB, PORTB_LD_DATE    ; Set date load pin high to latch data
     nop
     nop
-    cbi PORTB,1 ; clock low
+    cbi PORTB, PORTB_SPI_CLK    ; Clock low
     nop
     nop
     ret
 
 
 shiftBoth:
-    ; data is r18:r19
-    ldi r17,16
+    ldi r17,16      ; 16 bits to output
     shiftBothLoop:
-    cbi PORTB,1 ; clock low
-    clr r16
-    sbrc r18,7
-    ori r16,1 ; data high 
-    out PORTB,r16
-    lsl r19
-    rol r18
-    nop
-    nop
-    sbi PORTB,1 ; clock high
-    nop
-    nop
+        cbi PORTB, PORTB_SPI_CLK    ; Clock low
+        clr r16         ; Set everything low to enable date load and time load.  Could replace with ldi r16,(0<<PORTB_LD_DATE | 0<<PORTB_LD_TIME)
+        sbrc r18,7      ; Check next bit going out
+            ori r16, (1<<PORTB_SPI_DATA)    ; Set data high if next bit is high
+        out PORTB,r16   ; Send bit
+        lsl r19         ; Shift data byte left to get the next bit
+        rol r18         ; Shift address byte left to get the next bit
+        nop
+        nop
+        sbi PORTB, PORTB_SPI_CLK ; Clock high
+        nop
+        nop
 
-    dec r17
+        dec r17
     brne shiftBothLoop
 
-    sbi PORTB,2 ;Load high
-    sbi PORTB,3 ;Load high
+    sbi PORTB, PORTB_LD_TIME    ; Set time load pin high to latch data
+    sbi PORTB, PORTB_LD_DATE    ; Set date load pin high to latch data
     nop
     nop
-    cbi PORTB,1 ; clock low
+    cbi PORTB, PORTB_SPI_CLK    ; Clock low
     nop
     nop
     ret
@@ -2323,6 +2369,7 @@ monthLookup:
 
 
 ; Calibrate interpolated centiseconds to match the 1PPS output
+; This is an interrupt service routine triggered by the PPS input.
 timingAdjust:
     push ZH
     push ZL
@@ -2330,10 +2377,13 @@ timingAdjust:
     out TCNT1H,ZH
     out TCNT1L,ZH
 
-    lds ZL,fix
-    lds ZH,dataValid
-    eor ZL,ZH
-    sts fix,ZL
+    // This is what causes the colons to blink, and only runs when a valid PPS signal is present, triggering this ISR.
+    // Display routine loads 'fix' value into 'fixDisplay' and uses that to control whether the decimal points driving the colons are on or off.
+    // Changes state of 'fix' in memory every time this routine gets called.  Alternates between 0 and 0b10000000 to set decimal point driver connected to colon LEDs
+    lds ZL,fix          ; Load current fix value
+    lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
+    eor ZL,ZH           ; XOR toggles
+    sts fix,ZL          ; Save to RAM
 
     cpi dDeciSeconds, 5
     brcc timingSlow
