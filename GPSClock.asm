@@ -1,5 +1,5 @@
 //////////////
-// #define DEBUG
+#define DEBUG
 //////////////
 // Permanent DST / use jumper for manual DST control
 // #define NO_DST
@@ -60,6 +60,7 @@ GMT indicator: 10 day
 BST indicator: 1 day
 seconds decimal: 1 second
 */
+
 
 ; -----------------------------------------------------------------------------
 ;   Declare pins
@@ -349,6 +350,8 @@ seconds decimal: 1 second
 
 .def daysInLastMonth = r11    ;BCD
 
+.def isPM = r12
+
 // Start data segment - declare memory allocations
 .dseg
 
@@ -443,6 +446,7 @@ WDT_OVERFLOW:
 ; -----------------------------------------------------------------------------
 ;   ISR to increment digits (rollover) and send data to displays.
 ;   - This only updates digits that need updating, and it stops when it reaches one that doesn't.
+;   - In the absence of a valid GPS signal, this is the only thing that's running the clock.
 ; -----------------------------------------------------------------------------
 rollover:
     // Rollover gets called at 100Hz (every time the display needs updating)
@@ -573,21 +577,45 @@ overflow6:
     rcall shiftTime
 
     inc dHours
-    // Day rollover (skip 1/10 hours and go to 1 day)
-    ldi r18,2
-    cpi dHours,4
-    cpc dTenHours,r18
-    breq overflow8
 
-    #ifdef TWELVE_HOUR
-        // If it's 12:00, change AM/PM indicator
-        cpi dHours, 12
-        brne overflow6_not_noon
+    // Day rollover (skip hours and go to directly to 1 day)
+    #ifndef TWELVE_HOUR
+		ldi r18,2
+		cpi dHours,4		; This is an interesting technique, see page 67 of the instruction set manual.  Shorthand for a branch based on two compares
+		cpc dTenHours,r18
+		breq overflow8		; Branch if both compares matched
+	#else
+		// Some heavy lifting in this section.
+		// If hour = 13, set back to 1	(1259 -> 1300 = 12:59 -> 1:00 PM) AND (0059 -> 0100 = 12:59 -> 1:00 AM)
+		// If hour = 0, set to 12		(2359 -> 0000 = 11:59 -> 12:00)
+		// Also handles AM/PM transition and day rollover detection.
+
+		// Is this a change between AM and PM?
+		cpi dTenHours, 1
+		brne overflow6_not_am_pm_change
+		cpi dHours, 2
+		brne overflow6_not_am_pm_change
+
+		// Is it now AM or PM?
+		tst isPM
+		breq PC+2
+			rjmp overflow8		; Was PM, now AM - run day increment logic
+
+		// Was AM, now PM - set indicator
         ldi r20,0b10000000
         mov dBST,r20
         clr dGMT
+		rcall set_indicator
 
-        overflow6_not_noon:
+		overflow6_not_am_pm_change:
+		// If hour counter reaches 13, set back to 1.
+		ldi r18, 1
+		cpi dHours, 3
+		cpc dTenHours, r18
+		brne overflow6_not_thirteen
+			ldi dTenHours, 0
+			ldi dHours, 1
+		overflow6_not_thirteen:
     #endif
     
     cpi dHours,10
@@ -595,6 +623,9 @@ overflow6:
 
     ldi r18,$07
     mov r19,dHours
+    rcall shiftTime
+    ldi r18,$08
+    mov r19,dTenHours
     rcall shiftTime
 
     out SREG,r15
@@ -619,15 +650,20 @@ overflow8:
     // Reset hours to "00" when the day rolls over
     // Called by ten minute digit rollover when the hour increments to 24
     // Handles days digit 9 -> 0 as well as month-end checks
-    // TODO: This should also update the AM/PM indicator
-    clr dTenHours
-    clr dHours
 
-    // Set indicator to AM
     #ifdef TWELVE_HOUR
+		// Set hour counter to 12 instead of zero
+		ldi dTenHours, 1
+		ldi dHours, 2
+
+		// Set AM indicator
         ldi r20,0b10000000
         mov dGMT,r20
         clr dBST
+		rcall set_indicator
+	#else
+		clr dTenHours
+		clr dHours		
     #endif
 
     ldi r18,$07
@@ -925,42 +961,67 @@ init:
 
 //////////////////////////
     #ifdef DEBUG
+/*
+	12-hour testing
 
-        ldi r16,1
+	SendAll2 updates GMT/BST indicator on its own, so we can't rely on that being a valid test.
+
+	12:59AM - 1:00AM		12:59 AM -> 01:00 AM
+	9:59AM - 10:00AM		9:59 AM - 10:00 AM
+	10:59AM - 11:00AM		10:59 AM - 11:00 AM
+	11:59AM - 12:00PM
+
+	12:59PM - 1:00 PM
+	9:59PM - 10:00 PM
+	10:59PM - 11:00PM
+	11:59PM - 12:00AM
+
+	We're somewhat at-odds here in that rollover needs to adjust registers to keep hour in range of 1-12, but SendAll2 works with 24-hour clock.
+	Could have rollover send different data to the display, but keep 24-hour internally.
+*/
+
+		// Preload date/time into RAM (for timezone/DST calculations)
+        ldi r16,2				; 10 year
         sts tenYears,r16
-        ldi r16,8  +0b10000000
+        ldi r16,5  +0b10000000	; year (+ hyphen)
         sts years,r16
-        ldi r16,0
+        ldi r16,0				; 10 month
         sts tenMonths,r16
-        ldi r16,1  +0b10000000
+        ldi r16,3  +0b10000000	; month (+ hyphen)
         sts months,r16
-        ldi r16,0
+        ldi r16,1				; 10 day
         sts tenDays,r16
-        ldi r16,1
+        ldi r16,5				; day
         sts days,r16
-        ldi r16,0
+        ldi r16,1				; 10 hour
         sts tenHours,r16
-        ldi r16,0
+        ldi r16,2				; hour
         sts hours,r16
-        ldi r16,4
+        ldi r16,5				; 10 minute
         sts tenMinutes,r16
-        ldi r16,9
+        ldi r16,9				; minute
         sts minutes,r16
-        ldi r16,5
+        ldi r16,5				; 10 second
         sts tenSeconds,r16
-        ldi r16,5 +0b10000000
+        ldi r16,5 +0b10000000	; second (plus decimal point)
         sts seconds,r16
-        ldi r16,5
+        ldi r16,0				; decisecond
         sts deciSeconds,r16
-        ldi r16,5
+        ldi r16,0				; centisecond
         sts centiSeconds,r16
-            
+
+		#ifdef TWELVE_HOUR
+			ldi r16, 0b10000000		; AM
+			mov dGMT, r16
+			clr dBST
+		#endif
+
         lds r20, tenMonths
 
         ldi r21,10
         clr fullMonths
         sbrc r20,0
-        mov fullMonths,r21
+			mov fullMonths,r21
 
         lds r20, months
         andi r20,$0F
@@ -978,6 +1039,27 @@ init:
         lds r20,years
         andi r20,$0F
         add fullYears,r20
+
+		// Preload date/time into registers (for rollover ISR)
+		lds	dCentiSeconds, CentiSeconds
+		lds	dDeciSeconds, DeciSeconds
+		lds	dSeconds, Seconds
+		lds dTenSeconds, TenSeconds
+		lds dMinutes, Minutes
+		lds dTenMinutes, TenMinutes
+		lds dHours, Hours
+		lds dTenHours, TenHours
+		lds dDays, Days
+		lds dTenDays, TenDays
+		lds	dMonths, Months
+		lds dTenMonths, TenMonths
+		lds dYears, Years
+		lds dTenYears, TenYears
+
+		// Send values to display, then jump to main
+		//rcall set_indicator
+		rjmp SendAll2
+
     #endif
 ////////////////////
     ; rjmp main
@@ -1138,6 +1220,9 @@ main:
     ///////////////////////////
     // Debug mode active - do nothing with GPS data
     #else
+		; Let rollover run continuously
+		rjmp main
+
         nop
         nop
         nop
@@ -2047,6 +2132,7 @@ sendAll2:
             ldi r21,0b10000000
             mov dGMT,r21
             clr dBST
+			mov isPm, dBST
 
             // Map 00 -> 12
             cpi r20, 0
@@ -2056,6 +2142,8 @@ sendAll2:
 
             // PM - use BST indicator
             twelvehour_pm:
+			ldi r21, 1
+			mov isPM, r21
             ldi r21,0b10000000
             mov dBST,r21
             clr dGMT
@@ -2065,6 +2153,7 @@ sendAll2:
             twelvehour_done:
 
             // Convert back to tens/ones
+			ldi r21, 0
             cpi r20, 10
             brlo PC+3
                 subi r20, 10
@@ -2098,21 +2187,12 @@ sendAll2:
         or r19,dBST
         rcall shiftDate
 
-        #ifdef TWELVE_HOUR
-            ldi r18,$08
-            mov r19,r21
-            rcall shiftTime
-            ldi r18,$07
-            mov r19,r20
-            rcall shiftTime
-        #else
-            ldi r18,$08
-            mov r19,dTenHours
-            rcall shiftTime
-            ldi r18,$07
-            mov r19,dHours
-            rcall shiftTime
-        #endif
+        ldi r18,$08
+        mov r19,dTenHours
+        rcall shiftTime
+        ldi r18,$07
+        mov r19,dHours
+        rcall shiftTime
         ldi r18,$06
         mov r19,dTenMinutes
         rcall shiftTime
@@ -2156,6 +2236,17 @@ waitForComma:
     brne waitForComma
     ret
 
+// Send GMT/BST indicator to display
+set_indicator:
+	ldi r18,$01
+	mov r19,dDays
+	or r19,dBST         ; Include BST indicator state (driven by 1 day decimal point)
+	rcall shiftDate
+	ldi r18,$02
+	mov r19,dTenDays
+	or r19,dGMT         ; Include GMT indicator state (driven by 10 day decimal point)
+	rcall shiftDate
+	ret
 
 ; -----------------------------------------------------------------------------
 ;   MAX7219 driver
@@ -2168,6 +2259,15 @@ waitForComma:
 ; R19 is data byte (BCD)
 shiftTime:
     ldi r17, 16     ; 16 bits to output
+
+	#ifdef TWELVE_HOUR
+		// Don't print leading zeros
+		ldi r16, 0
+		cpi r18, $08	; Are we updating the ten hour digit
+		cpc r16, r19	; Is it zero
+		brne PC+2
+			ldi R19, 0x0F	; Blank
+	#endif
     
     shiftTimeLoop:
         cbi PORTB, PORTB_SPI_CLK    ; Clock low
@@ -2251,12 +2351,64 @@ shiftBoth:
     nop
     ret
 
+; -----------------------------------------------------------------------------
+;   Timing adjustments
+; -----------------------------------------------------------------------------
+; Calibrate interpolated centiseconds to match the 1PPS output
+; This is an interrupt service routine triggered by the PPS input.
+timingAdjust:
+    push ZH
+    push ZL
+    clr ZH
+    out TCNT1H,ZH
+    out TCNT1L,ZH
+
+    // This is what causes the colons to blink, and only runs when a valid PPS signal is present, triggering this ISR.
+    // Display routine loads 'fix' value into 'fixDisplay' and uses that to control whether the decimal points driving the colons are on or off.
+    // Changes state of 'fix' in memory every time this routine gets called.  Alternates between 0 and 0b10000000 to set decimal point driver connected to colon LEDs
+    lds ZL,fix          ; Load current fix value
+    lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
+    eor ZL,ZH           ; XOR toggles
+    sts fix,ZL          ; Save to RAM
+
+    cpi dDeciSeconds, 5
+    brcc timingSlow
+
+timingFast:
+    in ZL, OCR1AL
+    in ZH, OCR1AH
+    adiw ZH : ZL, 1
+    out OCR1AH, ZH
+    out OCR1AL, ZL
+    ldi dDeciSeconds,0 
+    ldi dCentiSeconds,0
+
+    pop ZL
+    pop ZH
+    out SREG, r15
+    reti
+
+timingSlow:
+    in ZL, OCR1AL
+    in ZH, OCR1AH
+    sbiw ZH : ZL, 1
+    out OCR1AH, ZH
+    out OCR1AL, ZL
+    ldi dDeciSeconds,9 
+    ldi dCentiSeconds,9
+
+    ldi ZH, 1<<OCF0A
+    out TIFR, ZH
+
+    pop ZL
+    pop ZH
+    rjmp rollover
 
 ; -----------------------------------------------------------------------------
 ; LOOKUP TABLES
 ; -----------------------------------------------------------------------------
 
-.org (768)
+;.org 0x700	; 256 bytes before end of memory
 
 monthLookup:
     ; 0 = december, 1 = january ... 12 = december
@@ -2380,57 +2532,3 @@ monthLookup:
         DSTEndMonth:
         .db $24,$29,$28,$27,$26,$24,$30,$29,$28,$26,$25,$24,$30,$28,$27,$26,$25,$30,$29,$28,$27,$25,$24,$30,$29,$27,$26,$25,$24,$29,$28,$27,$26,$24,$30,$29,$28,$26,$25,$24,$30,$28,$27,$26,$25,$30,$29,$28,$27,$25,$24,$30,$29,$27,$26,$25,$24,$29,$28,$27,$26,$24,$30,$29,$28,$26,$25,$24,$30,$28,$27,$26,$25,$30,$29,$28,$27,$25,$24,$30,$29,$27,$26,$25,$24
     #endif
-
-
-; -----------------------------------------------------------------------------
-;   Timing adjustments
-; -----------------------------------------------------------------------------
-; Calibrate interpolated centiseconds to match the 1PPS output
-; This is an interrupt service routine triggered by the PPS input.
-timingAdjust:
-    push ZH
-    push ZL
-    clr ZH
-    out TCNT1H,ZH
-    out TCNT1L,ZH
-
-    // This is what causes the colons to blink, and only runs when a valid PPS signal is present, triggering this ISR.
-    // Display routine loads 'fix' value into 'fixDisplay' and uses that to control whether the decimal points driving the colons are on or off.
-    // Changes state of 'fix' in memory every time this routine gets called.  Alternates between 0 and 0b10000000 to set decimal point driver connected to colon LEDs
-    lds ZL,fix          ; Load current fix value
-    lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
-    eor ZL,ZH           ; XOR toggles
-    sts fix,ZL          ; Save to RAM
-
-    cpi dDeciSeconds, 5
-    brcc timingSlow
-
-timingFast:
-    in ZL, OCR1AL
-    in ZH, OCR1AH
-    adiw ZH : ZL, 1
-    out OCR1AH, ZH
-    out OCR1AL, ZL
-    ldi dDeciSeconds,0 
-    ldi dCentiSeconds,0
-
-    pop ZL
-    pop ZH
-    out SREG, r15
-    reti
-
-timingSlow:
-    in ZL, OCR1AL
-    in ZH, OCR1AH
-    sbiw ZH : ZL, 1
-    out OCR1AH, ZH
-    out OCR1AL, ZL
-    ldi dDeciSeconds,9 
-    ldi dCentiSeconds,9
-
-    ldi ZH, 1<<OCF0A
-    out TIFR, ZH
-
-    pop ZL
-    pop ZH
-    rjmp rollover
