@@ -15,6 +15,12 @@
 
 #define TZ_US_EASTERN
 
+//////////////
+// Reuse GMT/BST indicators as AM/PM, and output in 12-hour format
+// UTC is always 24-hour
+#define TWELVE_HOUR
+//////////////
+
 /*
 Pin Configurations:
 
@@ -55,6 +61,10 @@ BST indicator: 1 day
 seconds decimal: 1 second
 */
 
+; -----------------------------------------------------------------------------
+;   Declare pins
+; -----------------------------------------------------------------------------
+
 // PortB output pins
 #define PORTB_SPI_DATA          0
 #define PORTB_SPI_CLK           1
@@ -73,7 +83,9 @@ seconds decimal: 1 second
 #define PORTA_UTC_NOXTAL        1
 
 
-
+; -----------------------------------------------------------------------------
+;   Declare timezones
+; -----------------------------------------------------------------------------
 
 #define JANUARY   1
 #define FEBRUARY  2
@@ -302,7 +314,7 @@ seconds decimal: 1 second
 
 
 ; -----------------------------------------------------------------------------
-; Declare registers and memory locations
+;   Declare registers and memory locations
 ; -----------------------------------------------------------------------------
 
 // Not using X/Y pointers, just use these as normal registers.
@@ -355,7 +367,6 @@ tenMonths: .byte 1
 years: .byte 1
 tenYears: .byte 1
 
-// TODO: Learn what these are
 fix: .byte 1
 fixDisplay: .byte 1     ; Controls whether colons are on or off
 dataValid: .byte 1
@@ -365,74 +376,74 @@ dataValid: .byte 1
 .cseg
 .org 0x00
 
-/*
 ; -----------------------------------------------------------------------------
-; INTERRUPT VECTOR DEFINITIONS
+;   INTERRUPT VECTOR DEFINITIONS
 ; -----------------------------------------------------------------------------
-rjmp    RESET       ; Reset handler
-rjmp    EXT_INT0    ; IRQ0 handler
-rjmp    PIN_CHANGE  ; Pin change handler
-rjmp    TIM1_CMP1A  ; Timer1 compare match 1A
-rjmp    TIM1_CMP1B  ; Timer1 compare match 1B
-rjmp    TIM1_OVF    ; Timer1 overflow handler
-rjmp    TIM0_OVF    ; Timer0 overflow handler
-rjmp    USI_STRT    ; USI Start handler
-rjmp    USI_OVF     ; USI Overflow handler
-rjmp    EE_RDY      ; EEPROM Ready handler
-rjmp    ANA_COMP    ; Analog Comparator handler
-rjmp    ADC_CONV    ; ADC Conversion Handler
+rjmp RESET          ; Reset
+rjmp EXT_INT0       ; External interrupt0
+rjmp EXT_INT1       ; External interrupt1
+rjmp TIM1_CAPT      ; Timer1 capture event
+rjmp TIM1_COMPA     ; Timer1 compare match A
+rjmp TIM1_OVF       ; Timer1 overflow
+rjmp TIM0_OVF       ; Timer0 overflow
+rjmp USART0_RXC     ; USART0 RX complete
+rjmp USART0_DRE     ; USART0 UDR empty
+rjmp USART0_TXC     ; USART0 TX complete
+rjmp ANA_COMP       ; Analog comparator handler
+rjmp PCINT          ; Pin change interrupt
+rjmp TIMER1_COMPB   ; Timer1 compare B
+rjmp TIMER0_COMPA   ; Timer0 compare A
+rjmp TIMER0_COMPB   ; Timer0 compare B
+rjmp USI_START      ; USI start
+rjmp USI_OVERFLOW   ; USI overflow
+rjmp EE_READY       ; EEPROM ready
+rjmp WDT_OVERFLOW   ; Watchdog overflow
 
-; -----------------------------------------------------------------------------
-; RESET ISR
-;  - Set stack pointer and jump to main
-; -----------------------------------------------------------------------------
+; Reset ISR
+; - Startup sequence
 RESET:
-    ldi temp, RAMEND ; Main program start
-    out SPL, temp
+    ldi r16, RAMEND ; Main program start
+    out SPL, r16
     cli
-    rjmp prog_start
+    rjmp init
 
+; External interrupt 0 ISR
+; - Runs every time PPS signal is received (1Hz) to calibrate timing
 EXT_INT0:
-PIN_CHANGE:
-TIM1_CMP1A:
-TIM1_CMP1B:
+    in r15,SREG
+    rjmp timingAdjust
+
+EXT_INT1:
+
+TIM1_CAPT:
+
+; Timer1 compare A match ISR
+; - Runs at 100Hz to update display
+TIM1_COMPA:
+    in r15,SREG
+    rjmp rollover
+
 TIM1_OVF:
 TIM0_OVF:
-USI_STRT:
-USI_OVF:
-EE_RDY:
+USART0_RXC:
+USART0_DRE:
+USART0_TXC:
 ANA_COMP:
-ADC_CONV:
+PCINT:
+TIMER1_COMPB:
+TIMER0_COMPA:
+TIMER0_COMPB:
+USI_START:
+USI_OVERFLOW:
+EE_READY:
+WDT_OVERFLOW:
+
+
 
 ; -----------------------------------------------------------------------------
-; PROGRAM START
+;   ISR to increment digits (rollover) and send data to displays.
+;   - This only updates digits that need updating, and it stops when it reaches one that doesn't.
 ; -----------------------------------------------------------------------------
-prog_start:
-*/
-
-// TODO: See if we can put in standard ISR vector definition block above.  Need to confirm which ISRs are being called and set jumps correctly.
-    // Reset (jump to init)
-    // Enable interrupt on TC1A output compare match (run rollover section at 100Hz)
-    // Rising edge of INT0 generates an interrupt request (PPS signal) (jump to timingAdjust)
-
-; Reset handler
-rjmp init
-
-; IRQ0 handler (PPS signal in)
-in r15,SREG
-
-; Pin change handler (??)
-rjmp timingAdjust
-;ldi dDeciSeconds,9  ;nop
-;ldi dCentiSeconds,9 ;nop
-
-; Timer1 compare match 1A
-nop
-
-; Timer1 compare match 1B
-in r15,SREG
-
-; Timer1 overflow handler??
 rollover:
     // Rollover gets called at 100Hz (every time the display needs updating)
     // Starts by incrementing CentiSeconds then cascades up from least to most significant digit, rolling nines to zeros.
@@ -562,10 +573,22 @@ overflow6:
     rcall shiftTime
 
     inc dHours
+    // Day rollover (skip 1/10 hours and go to 1 day)
     ldi r18,2
     cpi dHours,4
     cpc dTenHours,r18
     breq overflow8
+
+    #ifdef TWELVE_HOUR
+        // If it's 12:00, change AM/PM indicator
+        cpi dHours, 12
+        brne overflow6_not_noon
+        ldi r20,0b10000000
+        mov dBST,r20
+        clr dGMT
+
+        overflow6_not_noon:
+    #endif
     
     cpi dHours,10
     breq overflow7
@@ -596,8 +619,16 @@ overflow8:
     // Reset hours to "00" when the day rolls over
     // Called by ten minute digit rollover when the hour increments to 24
     // Handles days digit 9 -> 0 as well as month-end checks
+    // TODO: This should also update the AM/PM indicator
     clr dTenHours
     clr dHours
+
+    // Set indicator to AM
+    #ifdef TWELVE_HOUR
+        ldi r20,0b10000000
+        mov dGMT,r20
+        clr dBST
+    #endif
 
     ldi r18,$07
     mov r19,dHours
@@ -736,11 +767,9 @@ overflow13:
 
 ; -----------------------------------------------------------------------------
 ;   INIT SECTION
-;   - Called on reset
+;   - Power-on config
 ; -----------------------------------------------------------------------------
-
 init:
-
     ; Load calibration byte from EEPROM, if present
     clr r16
     out EEAR, r16
@@ -767,7 +796,7 @@ init:
     ldi r16, low(10000)
     out OCR1AL,r16
 
-    // Enable interrupt on TC1A output compare match
+    // Enable interrupt on timer/counter 1 output compare A match
     ldi r16,1<<OCIE1A
     out TIMSK,r16
 
@@ -951,11 +980,14 @@ init:
         add fullYears,r20
     #endif
 ////////////////////
+    ; rjmp main
 
 
 ; -----------------------------------------------------------------------------
-; PROGRAM START
-;  - Ends up here after init section completes
+;   MAIN PROGRAM
+;   - Read data from GPS and save in memory
+;   - Do DST calculations
+;   - Send data to displays
 ; -----------------------------------------------------------------------------
 main:
     // Enable interrupts
@@ -1117,7 +1149,10 @@ main:
     // Disable interrupts during processing
     cli
 
-    // Process data received from GPS
+; -----------------------------------------------------------------------------
+;   GPS DATA PROCESSING
+; -----------------------------------------------------------------------------
+
     ldi ZH, high(monthLookup*2)
     ldi ZL,  low(monthLookup*2)
     add ZL, fullMonths
@@ -1186,20 +1221,24 @@ main:
         // Standard control pins
         // Override timezone, just show UTC
         sbis PINA, PORTA_UTC_NOXTAL
-        rjmp makeUTC
+            rjmp makeUTC
 
         // Backup perma-DST marker
         sbis PINA, PORTA_PERMADST_NOXTAL
-        rjmp addHour
+            rjmp addHour
     #endif
 
     // DST enabled ?
     sbic PIND, PORTD_DST_EN
-        rjmp sendAll
+        rjmp sendAll    ; No DST, just send as-is.
+
+; -----------------------------------------------------------------------------
+;   DST CALCULATIONS
+; -----------------------------------------------------------------------------
 
     #ifdef NO_DST
         // With NO_DST the whole section below gets skipped
-        rjmp addHour
+        rjmp addHour    ; No DST, but DST_EN jumper fitted, just add an hour.
 
     #else
         // NOT NO_DST
@@ -1551,67 +1590,26 @@ main:
     #if (BASE_TZ_OFFSET==0)
 
         sendAll:
-        ldi r20,0b10000000
-        mov dGMT,r20
-        clr dBST
+        // Indicate GMT
+        #ifndef TWELVE_HOUR
+            ldi r20,0b10000000
+            mov dGMT,r20
+            clr dBST
+        #endif
 
-        sendAll2:
-        ldi r18,$08
-        ldi r19, THOUSAND_YEAR
-        rcall shiftDate
-        ldi r18,$07
-        ldi r19, HUNDRED_YEAR
-        rcall shiftDate
-        ldi r18,$06
-        mov r19,dTenYears
-        rcall shiftDate
-        ldi r18,$05
-        mov r19,dYears
-        rcall shiftDate
-        ldi r18,$04
-        mov r19,dTenMonths
-        rcall shiftDate
-        ldi r18,$03
-        mov r19,dMonths
-        rcall shiftDate
-        ldi r18,$02
-        mov r19,dTenDays
-        or r19,dGMT
-        rcall shiftDate
-        ldi r18,$01
-        mov r19,dDays
-        or r19,dBST
-        rcall shiftDate
-
-        ldi r18,$08
-        mov r19,dTenHours
-        rcall shiftTime
-        ldi r18,$07
-        mov r19,dHours
-        rcall shiftTime
-        ldi r18,$06
-        mov r19,dTenMinutes
-        rcall shiftTime
-        ldi r18,$05
-        mov r19,dMinutes
-        rcall shiftTime
-        ldi r18,$04
-        mov r19,dTenSeconds
-        rcall shiftTime
-        ldi r18,$03
-        mov r19,dSeconds
-        rcall shiftTime
-
-        rjmp main
+        rjmp sendAll2
 
         addHour:
+        // If we're adding an hour, it's BST
         #ifdef INDICATE_UTC
             clr dGMT
             clr dBST
         #else
-            ldi r20,0b10000000
-            mov dBST,r20
-            clr dGMT
+            #ifndef TWELVE_HOUR
+                ldi r20,0b10000000
+                mov dBST,r20
+                clr dGMT
+            #endif
         #endif
 
         inc dHours
@@ -1701,9 +1699,12 @@ main:
     #if (BASE_TZ_OFFSET > 0)
 
         sendAll:
-        ldi r20,0b10000000
-        mov dGMT,r20
-        clr dBST
+        // Indicate base timezone
+        #ifndef TWELVE_HOUR
+            ldi r20,0b10000000
+            mov dGMT,r20
+            clr dBST
+        #endif
         ldi r20, BASE_TZ_OFFSET
 
         sendAll3:
@@ -1832,68 +1833,21 @@ main:
         ldi r19,0b10000000
         mov dYears,r19
         inc dTenYears
-        ;rjmp sendAll2
 
-        sendAll2:
-
-        ldi r18,$08
-        ldi r19, THOUSAND_YEAR
-        rcall shiftDate
-        ldi r18,$07
-        ldi r19, HUNDRED_YEAR
-        rcall shiftDate
-        ldi r18,$06
-        mov r19,dTenYears
-        rcall shiftDate
-        ldi r18,$05
-        mov r19,dYears
-        rcall shiftDate
-        ldi r18,$04
-        mov r19,dTenMonths
-        rcall shiftDate
-        ldi r18,$03
-        mov r19,dMonths
-        rcall shiftDate
-        ldi r18,$02
-        mov r19,dTenDays
-        or r19,dGMT
-        rcall shiftDate
-        ldi r18,$01
-        mov r19,dDays
-        or r19,dBST
-        rcall shiftDate
-
-        ldi r18,$08
-        mov r19,dTenHours
-        rcall shiftTime
-        ldi r18,$07
-        mov r19,dHours
-        rcall shiftTime
-        ldi r18,$06
-        mov r19,dTenMinutes
-        rcall shiftTime
-        ldi r18,$05
-        mov r19,dMinutes
-        rcall shiftTime
-        ldi r18,$04
-        mov r19,dTenSeconds
-        rcall shiftTime
-        ldi r18,$03
-        mov r19,dSeconds
-        rcall shiftTime
-
-        rjmp main
+        rjmp sendAll2
 
         addHour:
+        // If adding an hour, indicate DST timezone
         #ifdef INDICATE_UTC
             clr dGMT
             clr dBST
         #else
-            ldi r20,0b10000000
-            mov dBST,r20
-            clr dGMT
+            #ifndef TWELVE_HOUR
+                ldi r20,0b10000000
+                mov dBST,r20
+                clr dGMT
+            #endif
         #endif
-
         ldi r20, BASE_TZ_OFFSET+1
 
         rjmp sendAll3
@@ -1906,9 +1860,12 @@ main:
     #if (BASE_TZ_OFFSET < 0)
 
         sendAll:
-        ldi r20,0b10000000
-        mov dGMT,r20
-        clr dBST
+        // Indicate base timezone
+        #ifndef TWELVE_HOUR
+            ldi r20,0b10000000
+            mov dGMT,r20
+            clr dBST
+        #endif
         ldi r20, BASE_TZ_OFFSET
 
         sendAll3:
@@ -1952,10 +1909,8 @@ main:
 
         clr dTenHours
 
-
         tst r20
         brmi saPrevDay
-
 
         saFullHours0:
         subi r20, 10
@@ -1967,7 +1922,6 @@ main:
         subi r20,-10
         mov dHours, r20
         rjmp sendAll2
-
 
         saPrevDay:
         subi r20,-24
@@ -2043,9 +1997,79 @@ main:
         ldi r18, 9 + 0b10000000
         mov dYears, r18
         dec dTenYears
-        ;rjmp sendAll2
+        rjmp sendAll2
 
-        sendAll2:
+        addHour:
+        // If adding an hour, indicate DST timezone
+        #ifdef INDICATE_UTC
+            clr dGMT
+            clr dBST
+        #else
+            #ifndef TWELVE_HOUR
+                ldi r20,0b10000000
+                mov dBST,r20
+                clr dGMT
+            #endif
+        #endif
+        ldi r20, BASE_TZ_OFFSET+1
+
+        rjmp sendAll3
+
+    #endif
+    // END (BASE_TZ_OFFSET < 0) section
+
+
+; -----------------------------------------------------------------------------
+; FUNCTION DEFINITIONS
+; -----------------------------------------------------------------------------
+
+// Send all date and time digits from registers to the display, then jump back the the beginning of the program
+sendAll2:
+        // Intercept display output to switch to a 12-hour clock
+        #ifdef TWELVE_HOUR
+
+            // Get full hours (0..24)
+            mov r20, dHours
+            mov r21, dTenHours
+            tst r21
+            breq twelvehour_no_tens
+                subi r20, -10
+                subi r21, 1
+                breq PC+2
+                    subi r20, -10
+            twelvehour_no_tens:
+
+            // Decide AM or PM
+            cpi r20, 12
+            brsh twelvehour_pm
+
+            // AM - use GMT indicator
+            ldi r21,0b10000000
+            mov dGMT,r21
+            clr dBST
+
+            // Map 00 -> 12
+            cpi r20, 0
+            brne twelvehour_done
+                ldi r20, 12
+            rjmp twelvehour_done
+
+            // PM - use BST indicator
+            twelvehour_pm:
+            ldi r21,0b10000000
+            mov dBST,r21
+            clr dGMT
+
+            // Subtract 12 (0..12)
+            subi r20, 12
+            twelvehour_done:
+
+            // Convert back to tens/ones
+            cpi r20, 10
+            brlo PC+3
+                subi r20, 10
+                ldi r21, 1
+        #endif
 
         ldi r18,$08
         ldi r19, THOUSAND_YEAR
@@ -2074,12 +2098,21 @@ main:
         or r19,dBST
         rcall shiftDate
 
-        ldi r18,$08
-        mov r19,dTenHours
-        rcall shiftTime
-        ldi r18,$07
-        mov r19,dHours
-        rcall shiftTime
+        #ifdef TWELVE_HOUR
+            ldi r18,$08
+            mov r19,r21
+            rcall shiftTime
+            ldi r18,$07
+            mov r19,r20
+            rcall shiftTime
+        #else
+            ldi r18,$08
+            mov r19,dTenHours
+            rcall shiftTime
+            ldi r18,$07
+            mov r19,dHours
+            rcall shiftTime
+        #endif
         ldi r18,$06
         mov r19,dTenMinutes
         rcall shiftTime
@@ -2095,28 +2128,6 @@ main:
 
         rjmp main
 
-        addHour:
-
-        #ifdef INDICATE_UTC
-            clr dGMT
-            clr dBST
-        #else
-            ldi r20,0b10000000
-            mov dBST,r20
-            clr dGMT
-        #endif
-
-        ldi r20, BASE_TZ_OFFSET+1
-
-        rjmp sendAll3
-
-    #endif
-    // END (BASE_TZ_OFFSET < 0) section
-
-
-; -----------------------------------------------------------------------------
-; FUNCTION DEFINITIONS
-; -----------------------------------------------------------------------------
 
 makeUTC:
     #ifdef INDICATE_UTC
@@ -2130,7 +2141,7 @@ makeUTC:
     #endif
     rjmp sendAll2
 
-
+// Wait for a byte from the serial port
 receiveByte:
     sbis UCSRA,RXC
         rjmp receiveByte
@@ -2138,7 +2149,7 @@ receiveByte:
     in r20,UDR
     ret
 
-
+// Wait for a comma from the serial port
 waitForComma:
     rcall receiveByte
     cpi r20, ','
@@ -2146,8 +2157,11 @@ waitForComma:
     ret
 
 
+; -----------------------------------------------------------------------------
+;   MAX7219 driver
+; -----------------------------------------------------------------------------
 
-; MAX7219 is MSB first
+; Expects data in order of MSB first to LSB last
 ; Data packet is 4 bits nothing, 4 bits address, 8 bits data
 ; Loads data on rising of LD pin (hold high to disable loading)
 ; R18 is address byte (0-15)
@@ -2368,6 +2382,9 @@ monthLookup:
     #endif
 
 
+; -----------------------------------------------------------------------------
+;   Timing adjustments
+; -----------------------------------------------------------------------------
 ; Calibrate interpolated centiseconds to match the 1PPS output
 ; This is an interrupt service routine triggered by the PPS input.
 timingAdjust:
