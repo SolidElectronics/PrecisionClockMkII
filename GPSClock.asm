@@ -1,23 +1,23 @@
 //////////////
-#define DEBUG
+// Debug mode - free-running clock with no GPS input
+// #define DEBUG
 //////////////
 // Permanent DST / use jumper for manual DST control
 // #define NO_DST
 //////////////
 // Disable blinking colons
 // #define DISABLE_BLINKING_ENTIRELY
-// 
+//////////////
+// Timezone
 // #define BASE_TZ_OFFSET     0
 // #define FRACTIONAL_OFFSET 45
 //
 // #define TZ_LONDON
-//////////////
-
 #define TZ_US_EASTERN
-
 //////////////
-// Reuse GMT/BST indicators as AM/PM, and output in 12-hour format
-// UTC is always 24-hour
+// 12-hour mode
+// Uses GMT/BST indicators as AM/PM, and outputs in 12-hour format
+// UTC jumper works but still outputs as AM/PM, can't easily include both 
 #define TWELVE_HOUR
 //////////////
 
@@ -350,8 +350,6 @@ seconds decimal: 1 second
 
 .def daysInLastMonth = r11    ;BCD
 
-.def isPM = r12
-
 // Start data segment - declare memory allocations
 .dseg
 
@@ -440,7 +438,6 @@ USI_START:
 USI_OVERFLOW:
 EE_READY:
 WDT_OVERFLOW:
-
 
 
 ; -----------------------------------------------------------------------------
@@ -579,54 +576,15 @@ overflow6:
     inc dHours
 
     // Day rollover (skip hours and go to directly to 1 day)
-    #ifndef TWELVE_HOUR
-		ldi r18,2
-		cpi dHours,4		; This is an interesting technique, see page 67 of the instruction set manual.  Shorthand for a branch based on two compares
-		cpc dTenHours,r18
-		breq overflow8		; Branch if both compares matched
-	#else
-		// Some heavy lifting in this section.
-		// If hour = 13, set back to 1	(1259 -> 1300 = 12:59 -> 1:00 PM) AND (0059 -> 0100 = 12:59 -> 1:00 AM)
-		// If hour = 0, set to 12		(2359 -> 0000 = 11:59 -> 12:00)
-		// Also handles AM/PM transition and day rollover detection.
-
-		// Is this a change between AM and PM?
-		cpi dTenHours, 1
-		brne overflow6_not_am_pm_change
-		cpi dHours, 2
-		brne overflow6_not_am_pm_change
-
-		// Is it now AM or PM?
-		tst isPM
-		breq PC+2
-			rjmp overflow8		; Was PM, now AM - run day increment logic
-
-		// Was AM, now PM - set indicator
-        ldi r20,0b10000000
-        mov dBST,r20
-        clr dGMT
-		rcall set_indicator
-
-		overflow6_not_am_pm_change:
-		// If hour counter reaches 13, set back to 1.
-		ldi r18, 1
-		cpi dHours, 3
-		cpc dTenHours, r18
-		brne overflow6_not_thirteen
-			ldi dTenHours, 0
-			ldi dHours, 1
-		overflow6_not_thirteen:
-    #endif
-    
+	ldi r18,2
+	cpi dHours,4		; This is an interesting technique, see page 67 of the instruction set manual.  Shorthand for a branch based on two compares
+	cpc dTenHours,r18
+	breq overflow8		; Branch if both compares matched
+  
     cpi dHours,10
     breq overflow7
 
-    ldi r18,$07
-    mov r19,dHours
-    rcall shiftTime
-    ldi r18,$08
-    mov r19,dTenHours
-    rcall shiftTime
+	rcall send_hours
 
     out SREG,r15
     reti
@@ -634,14 +592,9 @@ overflow6:
 overflow7:
     // Hours digit 9 -> 0 (9:59 -> 10:00 and 19:59 -> 20:00)
     clr dHours
-    ldi r18,$07
-    mov r19,dHours
-    rcall shiftTime
+	inc dTenHours
 
-    inc dTenHours
-    ldi r18,$08
-    mov r19,dTenHours
-    rcall shiftTime
+	rcall send_hours
 
     out SREG,r15
     reti
@@ -651,28 +604,10 @@ overflow8:
     // Called by ten minute digit rollover when the hour increments to 24
     // Handles days digit 9 -> 0 as well as month-end checks
 
-    #ifdef TWELVE_HOUR
-		// Set hour counter to 12 instead of zero
-		ldi dTenHours, 1
-		ldi dHours, 2
+	clr dTenHours
+	clr dHours		
 
-		// Set AM indicator
-        ldi r20,0b10000000
-        mov dGMT,r20
-        clr dBST
-		rcall set_indicator
-	#else
-		clr dTenHours
-		clr dHours		
-    #endif
-
-    ldi r18,$07
-    mov r19,dHours
-    rcall shiftTime
-
-    ldi r18,$08
-    mov r19,dTenHours
-    rcall shiftTime
+	rcall send_hours
 
     ;inc dDays
     mov r18,dTenDays
@@ -961,24 +896,6 @@ init:
 
 //////////////////////////
     #ifdef DEBUG
-/*
-	12-hour testing
-
-	SendAll2 updates GMT/BST indicator on its own, so we can't rely on that being a valid test.
-
-	12:59AM - 1:00AM		12:59 AM -> 01:00 AM
-	9:59AM - 10:00AM		9:59 AM - 10:00 AM
-	10:59AM - 11:00AM		10:59 AM - 11:00 AM
-	11:59AM - 12:00PM
-
-	12:59PM - 1:00 PM
-	9:59PM - 10:00 PM
-	10:59PM - 11:00PM
-	11:59PM - 12:00AM
-
-	We're somewhat at-odds here in that rollover needs to adjust registers to keep hour in range of 1-12, but SendAll2 works with 24-hour clock.
-	Could have rollover send different data to the display, but keep 24-hour internally.
-*/
 
 		// Preload date/time into RAM (for timezone/DST calculations)
         ldi r16,2				; 10 year
@@ -993,9 +910,9 @@ init:
         sts tenDays,r16
         ldi r16,5				; day
         sts days,r16
-        ldi r16,1				; 10 hour
+        ldi r16,2				; 10 hour
         sts tenHours,r16
-        ldi r16,2				; hour
+        ldi r16,3				; hour
         sts hours,r16
         ldi r16,5				; 10 minute
         sts tenMinutes,r16
@@ -1010,8 +927,9 @@ init:
         ldi r16,0				; centisecond
         sts centiSeconds,r16
 
-		#ifdef TWELVE_HOUR
-			ldi r16, 0b10000000		; AM
+		// Set timezone
+		#ifndef TWELVE_HOUR
+			ldi r16, 0b10000000
 			mov dGMT, r16
 			clr dBST
 		#endif
@@ -1057,7 +975,6 @@ init:
 		lds dTenYears, TenYears
 
 		// Send values to display, then jump to main
-		//rcall set_indicator
 		rjmp SendAll2
 
     #endif
@@ -2110,56 +2027,6 @@ main:
 
 // Send all date and time digits from registers to the display, then jump back the the beginning of the program
 sendAll2:
-        // Intercept display output to switch to a 12-hour clock
-        #ifdef TWELVE_HOUR
-
-            // Get full hours (0..24)
-            mov r20, dHours
-            mov r21, dTenHours
-            tst r21
-            breq twelvehour_no_tens
-                subi r20, -10
-                subi r21, 1
-                breq PC+2
-                    subi r20, -10
-            twelvehour_no_tens:
-
-            // Decide AM or PM
-            cpi r20, 12
-            brsh twelvehour_pm
-
-            // AM - use GMT indicator
-            ldi r21,0b10000000
-            mov dGMT,r21
-            clr dBST
-			mov isPm, dBST
-
-            // Map 00 -> 12
-            cpi r20, 0
-            brne twelvehour_done
-                ldi r20, 12
-            rjmp twelvehour_done
-
-            // PM - use BST indicator
-            twelvehour_pm:
-			ldi r21, 1
-			mov isPM, r21
-            ldi r21,0b10000000
-            mov dBST,r21
-            clr dGMT
-
-            // Subtract 12 (0..12)
-            subi r20, 12
-            twelvehour_done:
-
-            // Convert back to tens/ones
-			ldi r21, 0
-            cpi r20, 10
-            brlo PC+3
-                subi r20, 10
-                ldi r21, 1
-        #endif
-
         ldi r18,$08
         ldi r19, THOUSAND_YEAR
         rcall shiftDate
@@ -2187,12 +2054,8 @@ sendAll2:
         or r19,dBST
         rcall shiftDate
 
-        ldi r18,$08
-        mov r19,dTenHours
-        rcall shiftTime
-        ldi r18,$07
-        mov r19,dHours
-        rcall shiftTime
+		rcall send_hours
+
         ldi r18,$06
         mov r19,dTenMinutes
         rcall shiftTime
@@ -2247,6 +2110,83 @@ set_indicator:
 	or r19,dGMT         ; Include GMT indicator state (driven by 10 day decimal point)
 	rcall shiftDate
 	ret
+
+
+// Send hour data to display
+// In 12-hour mode, this will handle the necessary conversions while allowing the clock to run in 24-hour mode internally.
+// This should be the only routine sending hour data to the display to ensure it's done correctly.
+send_hours:
+	#ifndef TWELVE_HOUR
+		// In 24-hour mode, just send as-is.
+		ldi r18,$07
+		mov r19,dHours
+		rcall shiftTime
+		ldi r18,$08
+		mov r19,dTenHours
+		rcall shiftTime
+		ret
+	#else
+		// Could include the above here to output as 24-hour with UTC jumper set, but not implemented.
+		// In 12-hour mode, handle hour conversions
+		mov r20, dHours
+		cpi dTenHours, 2
+		brne PC+2
+			subi r20, -20
+		cpi dTenHours, 1
+		brne PC+2
+			subi r20, -10
+		// r20 now has full hour count (0..24)
+
+		send_hours_test1:
+		cpi r20, 12
+		brsh send_hours_test2
+			// Hour below 12 (0..11) - Set AM (GMT)
+			ldi r16, 0b10000000
+			mov dGMT, r16
+			clr dBST
+
+		send_hours_test2:
+		cpi r20, 12
+		brlo send_hours_test3
+			// Hour above 11 (12..24) - Set PM (BST)
+			ldi r16, 0b10000000
+			mov dBST, r16
+			clr dGMT
+
+		send_hours_test3:
+		cpi r20, 0
+		brne send_hours_test_done
+			// hour 0 -> set hour display to 12
+			ldi r20, 12
+
+		// Special case handling done, now convert to 12-hour clock
+		send_hours_test_done:
+		cpi r20, 13
+		brlo PC+2
+			// Hour above 12 (13..24) -> subtract 12 to bring back to (1..12)
+			subi r20, 12
+
+        // Convert back into tens and ones digits
+		// R21 = tens, R20 = ones
+		ldi r21, 0
+        cpi r20, 10
+        brlo PC+3
+            subi r20, 10
+            ldi r21, 1
+
+		// Send data to display
+		ldi r18,$07
+		mov r19, r20
+		rcall shiftTime		; Hours
+		ldi r18,$08
+		mov r19, r21
+		rcall shiftTime		; Ten hours
+
+		// Set GMT/BST indicator as well
+		rcall set_indicator
+		ret
+	#endif
+
 
 ; -----------------------------------------------------------------------------
 ;   MAX7219 driver
