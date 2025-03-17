@@ -120,7 +120,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      LAST_SUNDAY
   #define DST_END_MONTH      OCTOBER
-  #define DST_END_DAY    LAST_SUNDAY
+  #define DST_END_DAY        LAST_SUNDAY
 #endif
 
 #ifdef TZ_CENTRAL_EUROPE
@@ -128,7 +128,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      LAST_SUNDAY
   #define DST_END_MONTH      OCTOBER
-  #define DST_END_DAY    LAST_SUNDAY
+  #define DST_END_DAY        LAST_SUNDAY
 #endif
 
 #ifdef TZ_EASTERN_EUROPE
@@ -136,7 +136,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      LAST_SUNDAY
   #define DST_END_MONTH      OCTOBER
-  #define DST_END_DAY    LAST_SUNDAY
+  #define DST_END_DAY        LAST_SUNDAY
 #endif
 
 ; Most of Atlantic time does not observe DST, but a few regions do (e.g. Bermuda)
@@ -145,7 +145,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      SECOND_SUNDAY
   #define DST_END_MONTH      NOVEMBER
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME
 #endif
 
@@ -154,7 +154,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      SECOND_SUNDAY
   #define DST_END_MONTH      NOVEMBER
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME
 #endif
 
@@ -163,7 +163,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      SECOND_SUNDAY
   #define DST_END_MONTH      NOVEMBER
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME
 #endif
 
@@ -172,7 +172,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      SECOND_SUNDAY
   #define DST_END_MONTH      NOVEMBER
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME
 #endif
 
@@ -188,7 +188,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      SECOND_SUNDAY
   #define DST_END_MONTH      NOVEMBER
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME
 #endif
 
@@ -197,7 +197,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      SECOND_SUNDAY
   #define DST_END_MONTH      NOVEMBER
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME
 #endif
 
@@ -213,7 +213,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      SECOND_SUNDAY
   #define DST_END_MONTH      NOVEMBER
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
 #endif
 
 #ifdef TZ_NEWZEALAND
@@ -221,7 +221,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    SEPTEMBER
   #define DST_START_DAY      LAST_SUNDAY
   #define DST_END_MONTH      APRIL
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME ; switches back at 3AM
 #endif
 
@@ -230,7 +230,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    OCTOBER
   #define DST_START_DAY      FIRST_SUNDAY
   #define DST_END_MONTH      APRIL
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME ; switches back at 3AM
 #endif
 
@@ -247,7 +247,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    OCTOBER
   #define DST_START_DAY      FIRST_SUNDAY
   #define DST_END_MONTH      APRIL
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
   #define DST_SWITCH_AT_2AM_LOCAL_TIME ; switches back at 3AM
 #endif
 
@@ -289,7 +289,7 @@ seconds decimal: 1 second
   #define DST_START_MONTH    MARCH
   #define DST_START_DAY      SECOND_SUNDAY
   #define DST_END_MONTH      NOVEMBER
-  #define DST_END_DAY    FIRST_SUNDAY
+  #define DST_END_DAY        FIRST_SUNDAY
 #endif
 
 #ifdef TZ_JAPAN
@@ -576,15 +576,15 @@ overflow6:
     inc dHours
 
     // Day rollover (skip hours and go to directly to 1 day)
-	ldi r18,2
-	cpi dHours,4		; This is an interesting technique, see page 67 of the instruction set manual.  Shorthand for a branch based on two compares
-	cpc dTenHours,r18
-	breq overflow8		; Branch if both compares matched
+    ldi r18,2
+    cpi dHours,4        ; This is an interesting technique, see page 67 of the instruction set manual.  Shorthand for a branch based on two compares
+    cpc dTenHours,r18
+    breq overflow8      ; Branch if both compares matched
   
     cpi dHours,10
     breq overflow7
 
-	rcall send_hours
+    rcall send_hours
 
     out SREG,r15
     reti
@@ -592,9 +592,9 @@ overflow6:
 overflow7:
     // Hours digit 9 -> 0 (9:59 -> 10:00 and 19:59 -> 20:00)
     clr dHours
-	inc dTenHours
+    inc dTenHours
 
-	rcall send_hours
+    rcall send_hours
 
     out SREG,r15
     reti
@@ -604,10 +604,10 @@ overflow8:
     // Called by ten minute digit rollover when the hour increments to 24
     // Handles days digit 9 -> 0 as well as month-end checks
 
-	clr dTenHours
-	clr dHours		
+    clr dTenHours
+    clr dHours
 
-	rcall send_hours
+    rcall send_hours
 
     ;inc dDays
     mov r18,dTenDays
@@ -897,49 +897,49 @@ init:
 //////////////////////////
     #ifdef DEBUG
 
-		// Preload date/time into RAM (for timezone/DST calculations)
-        ldi r16,2				; 10 year
+        // Preload date/time into RAM (for timezone/DST calculations)
+        ldi r16,2               ; 10 year
         sts tenYears,r16
-        ldi r16,5  +0b10000000	; year (+ hyphen)
+        ldi r16,5  +0b10000000  ; year (+ hyphen)
         sts years,r16
-        ldi r16,0				; 10 month
+        ldi r16,0               ; 10 month
         sts tenMonths,r16
-        ldi r16,3  +0b10000000	; month (+ hyphen)
+        ldi r16,3  +0b10000000  ; month (+ hyphen)
         sts months,r16
-        ldi r16,1				; 10 day
+        ldi r16,1               ; 10 day
         sts tenDays,r16
-        ldi r16,5				; day
+        ldi r16,5               ; day
         sts days,r16
-        ldi r16,2				; 10 hour
+        ldi r16,2               ; 10 hour
         sts tenHours,r16
-        ldi r16,3				; hour
+        ldi r16,3               ; hour
         sts hours,r16
-        ldi r16,5				; 10 minute
+        ldi r16,5               ; 10 minute
         sts tenMinutes,r16
-        ldi r16,9				; minute
+        ldi r16,9               ; minute
         sts minutes,r16
-        ldi r16,5				; 10 second
+        ldi r16,5               ; 10 second
         sts tenSeconds,r16
-        ldi r16,5 +0b10000000	; second (plus decimal point)
+        ldi r16,5 +0b10000000   ; second (plus decimal point)
         sts seconds,r16
-        ldi r16,0				; decisecond
+        ldi r16,0               ; decisecond
         sts deciSeconds,r16
-        ldi r16,0				; centisecond
+        ldi r16,0               ; centisecond
         sts centiSeconds,r16
 
-		// Set timezone
-		#ifndef TWELVE_HOUR
-			ldi r16, 0b10000000
-			mov dGMT, r16
-			clr dBST
-		#endif
+        // Set timezone
+        #ifndef TWELVE_HOUR
+            ldi r16, 0b10000000
+            mov dGMT, r16
+            clr dBST
+        #endif
 
         lds r20, tenMonths
 
         ldi r21,10
         clr fullMonths
         sbrc r20,0
-			mov fullMonths,r21
+            mov fullMonths,r21
 
         lds r20, months
         andi r20,$0F
@@ -958,24 +958,24 @@ init:
         andi r20,$0F
         add fullYears,r20
 
-		// Preload date/time into registers (for rollover ISR)
-		lds	dCentiSeconds, CentiSeconds
-		lds	dDeciSeconds, DeciSeconds
-		lds	dSeconds, Seconds
-		lds dTenSeconds, TenSeconds
-		lds dMinutes, Minutes
-		lds dTenMinutes, TenMinutes
-		lds dHours, Hours
-		lds dTenHours, TenHours
-		lds dDays, Days
-		lds dTenDays, TenDays
-		lds	dMonths, Months
-		lds dTenMonths, TenMonths
-		lds dYears, Years
-		lds dTenYears, TenYears
+        // Preload date/time into registers (for rollover ISR)
+        lds dCentiSeconds, CentiSeconds
+        lds dDeciSeconds, DeciSeconds
+        lds dSeconds, Seconds
+        lds dTenSeconds, TenSeconds
+        lds dMinutes, Minutes
+        lds dTenMinutes, TenMinutes
+        lds dHours, Hours
+        lds dTenHours, TenHours
+        lds dDays, Days
+        lds dTenDays, TenDays
+        lds dMonths, Months
+        lds dTenMonths, TenMonths
+        lds dYears, Years
+        lds dTenYears, TenYears
 
-		// Send values to display, then jump to main
-		rjmp SendAll2
+        // Send values to display, then jump to main
+        rjmp SendAll2
 
     #endif
 ////////////////////
@@ -1137,8 +1137,8 @@ main:
     ///////////////////////////
     // Debug mode active - do nothing with GPS data
     #else
-		; Let rollover run continuously
-		rjmp main
+        ; Let rollover run continuously
+        rjmp main
 
         nop
         nop
@@ -2054,7 +2054,7 @@ sendAll2:
         or r19,dBST
         rcall shiftDate
 
-		rcall send_hours
+        rcall send_hours
 
         ldi r18,$06
         mov r19,dTenMinutes
@@ -2101,91 +2101,91 @@ waitForComma:
 
 // Send GMT/BST indicator to display
 set_indicator:
-	ldi r18,$01
-	mov r19,dDays
-	or r19,dBST         ; Include BST indicator state (driven by 1 day decimal point)
-	rcall shiftDate
-	ldi r18,$02
-	mov r19,dTenDays
-	or r19,dGMT         ; Include GMT indicator state (driven by 10 day decimal point)
-	rcall shiftDate
-	ret
+    ldi r18,$01
+    mov r19,dDays
+    or r19,dBST         ; Include BST indicator state (driven by 1 day decimal point)
+    rcall shiftDate
+    ldi r18,$02
+    mov r19,dTenDays
+    or r19,dGMT         ; Include GMT indicator state (driven by 10 day decimal point)
+    rcall shiftDate
+    ret
 
 
 // Send hour data to display
 // In 12-hour mode, this will handle the necessary conversions while allowing the clock to run in 24-hour mode internally.
 // This should be the only routine sending hour data to the display to ensure it's done correctly.
 send_hours:
-	#ifndef TWELVE_HOUR
-		// In 24-hour mode, just send as-is.
-		ldi r18,$07
-		mov r19,dHours
-		rcall shiftTime
-		ldi r18,$08
-		mov r19,dTenHours
-		rcall shiftTime
-		ret
-	#else
-		// Could include the above here to output as 24-hour with UTC jumper set, but not implemented.
-		// In 12-hour mode, handle hour conversions
-		mov r20, dHours
-		cpi dTenHours, 2
-		brne PC+2
-			subi r20, -20
-		cpi dTenHours, 1
-		brne PC+2
-			subi r20, -10
-		// r20 now has full hour count (0..24)
+    #ifndef TWELVE_HOUR
+        // In 24-hour mode, just send as-is.
+        ldi r18,$07
+        mov r19,dHours
+        rcall shiftTime
+        ldi r18,$08
+        mov r19,dTenHours
+        rcall shiftTime
+        ret
+    #else
+        // Could include the above here to output as 24-hour with UTC jumper set, but not implemented.
+        // In 12-hour mode, handle hour conversions
+        mov r20, dHours
+        cpi dTenHours, 2
+        brne PC+2
+            subi r20, -20
+        cpi dTenHours, 1
+        brne PC+2
+            subi r20, -10
+        // r20 now has full hour count (0..24)
 
-		send_hours_test1:
-		cpi r20, 12
-		brsh send_hours_test2
-			// Hour below 12 (0..11) - Set AM (GMT)
-			ldi r16, 0b10000000
-			mov dGMT, r16
-			clr dBST
+        send_hours_test1:
+        cpi r20, 12
+        brsh send_hours_test2
+            // Hour below 12 (0..11) - Set AM (GMT)
+            ldi r16, 0b10000000
+            mov dGMT, r16
+            clr dBST
 
-		send_hours_test2:
-		cpi r20, 12
-		brlo send_hours_test3
-			// Hour above 11 (12..24) - Set PM (BST)
-			ldi r16, 0b10000000
-			mov dBST, r16
-			clr dGMT
+        send_hours_test2:
+        cpi r20, 12
+        brlo send_hours_test3
+            // Hour above 11 (12..24) - Set PM (BST)
+            ldi r16, 0b10000000
+            mov dBST, r16
+            clr dGMT
 
-		send_hours_test3:
-		cpi r20, 0
-		brne send_hours_test_done
-			// hour 0 -> set hour display to 12
-			ldi r20, 12
+        send_hours_test3:
+        cpi r20, 0
+        brne send_hours_test_done
+            // hour 0 -> set hour display to 12
+            ldi r20, 12
 
-		// Special case handling done, now convert to 12-hour clock
-		send_hours_test_done:
-		cpi r20, 13
-		brlo PC+2
-			// Hour above 12 (13..24) -> subtract 12 to bring back to (1..12)
-			subi r20, 12
+        // Special case handling done, now convert to 12-hour clock
+        send_hours_test_done:
+        cpi r20, 13
+        brlo PC+2
+            // Hour above 12 (13..24) -> subtract 12 to bring back to (1..12)
+            subi r20, 12
 
         // Convert back into tens and ones digits
-		// R21 = tens, R20 = ones
-		ldi r21, 0
+        // R21 = tens, R20 = ones
+        ldi r21, 0
         cpi r20, 10
         brlo PC+3
             subi r20, 10
             ldi r21, 1
 
-		// Send data to display
-		ldi r18,$07
-		mov r19, r20
-		rcall shiftTime		; Hours
-		ldi r18,$08
-		mov r19, r21
-		rcall shiftTime		; Ten hours
+        // Send data to display
+        ldi r18,$07
+        mov r19, r20
+        rcall shiftTime     ; Hours
+        ldi r18,$08
+        mov r19, r21
+        rcall shiftTime     ; Ten hours
 
-		// Set GMT/BST indicator as well
-		rcall set_indicator
-		ret
-	#endif
+        // Set GMT/BST indicator as well
+        rcall set_indicator
+        ret
+    #endif
 
 
 ; -----------------------------------------------------------------------------
@@ -2200,14 +2200,14 @@ send_hours:
 shiftTime:
     ldi r17, 16     ; 16 bits to output
 
-	#ifdef TWELVE_HOUR
-		// Don't print leading zeros
-		ldi r16, 0
-		cpi r18, $08	; Are we updating the ten hour digit
-		cpc r16, r19	; Is it zero
-		brne PC+2
-			ldi R19, 0x0F	; Blank
-	#endif
+    #ifdef TWELVE_HOUR
+        // Don't print leading zeros
+        ldi r16, 0
+        cpi r18, $08    ; Are we updating the ten hour digit
+        cpc r16, r19    ; Is it zero
+        brne PC+2
+        ldi R19, 0x0F   ; Blank
+    #endif
     
     shiftTimeLoop:
         cbi PORTB, PORTB_SPI_CLK    ; Clock low
@@ -2348,7 +2348,7 @@ timingSlow:
 ; LOOKUP TABLES
 ; -----------------------------------------------------------------------------
 
-;.org 0x700	; 256 bytes before end of memory
+;.org 0x700     ; 256 bytes before end of memory
 
 monthLookup:
     ; 0 = december, 1 = january ... 12 = december
