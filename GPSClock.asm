@@ -8,17 +8,18 @@
 // Disable blinking colons
 // #define DISABLE_BLINKING_ENTIRELY
 //////////////
+// Show time in 12-hour format
+#define TWELVE_HOUR
+// 12-hour AM/PM indicator (select one)
+#define TWELVE_HOUR_INDICATE_DECIMAL ; Use seconds decimal point for PM (for clocks without fractional seconds)
+// #define TWELVE_HOUR_INDICATE_ZONE    ; Takeover GMT/BST indicators for AM/PM
+//////////////
 // Timezone
 // #define BASE_TZ_OFFSET     0
 // #define FRACTIONAL_OFFSET 45
 //
 // #define TZ_LONDON
 #define TZ_US_EASTERN
-//////////////
-// 12-hour mode
-// Uses GMT/BST indicators as AM/PM, and outputs in 12-hour format
-// UTC jumper works but still outputs as AM/PM, can't easily include both 
-#define TWELVE_HOUR
 //////////////
 
 /*
@@ -347,8 +348,9 @@ seconds decimal: 1 second
 
 .def dGMT = r9
 .def dBST = r10
+.def dIndPM = r11
 
-.def daysInLastMonth = r11    ;BCD
+.def daysInLastMonth = r12    ;BCD
 
 // Start data segment - declare memory allocations
 .dseg
@@ -453,6 +455,7 @@ rollover:
     cpi dCentiSeconds, 10
     breq overflow1
     
+    // Centiseconds increased but didn't roll over - update display
     ldi r18, $01
     lds r19, fixDisplay     ; Pre-load M/S colon state (driven from centiseconds)
     eor r19, dCentiSeconds
@@ -468,6 +471,7 @@ overflow1:
     lds r19, fix            ; Update fixDisplay from 'fix' value.  fix is alternated every second in timingAdjust routine (when PPS signal present)
     sts fixDisplay, r19     ; Save back to fixDisplay memory location (this is the only place it gets set)
 
+    // Update this digit to zero (lower digit just rolled over)
     clr dCentiSeconds
     ldi r18,$01
     eor r19,dCentiSeconds   ; Combine centiseconds with pre-loaded fixDisplay in R19 for M/S colon state
@@ -475,10 +479,13 @@ overflow1:
     ;ori r19,0b10000000
     rcall shiftTime
 
+    // This digit rolling over to zero increases next most significant digit by one.
+    // If that causes the next most significant digit to roll over too, jump to the next rollover section to handle that.
     inc dDeciSeconds
     cpi dDeciSeconds,10
     breq overflow2
 
+    // Next most significant digit didn't rollover, but does need updating on the display.
     ldi r18,$02
     lds r19,fixDisplay      ; Pre-load H/M colon state (driven from deciseconds)
     eor r19,dDeciSeconds
@@ -500,12 +507,16 @@ overflow2:
     rcall shiftTime
 
     inc dSeconds
-    cpi dSeconds,(10 +0b10000000)
+    cpi dSeconds, 10
     breq overflow3
 
     ldi r18,$03
     mov r19,dSeconds
-    ori r19,0b10000000
+    #ifdef TWELVE_HOUR_INDICATE_DECIMAL ; Control seconds decimal point
+        or r19, dIndPM
+    #else
+        ori r19, 0b10000000
+    #endif
     rcall shiftTime
 
     out SREG,r15
@@ -513,10 +524,14 @@ overflow2:
 
 overflow3:
     // Seconds digit 9 -> 0
-    ldi dSeconds,0b10000000
+    clr dSeconds
     ldi r18,$03
     mov r19,dSeconds
-    ori r19,0b10000000
+    #ifdef TWELVE_HOUR_INDICATE_DECIMAL ; Control seconds decimal point
+        or r19, dIndPM
+    #else
+        ori r19, 0b10000000
+    #endif
     rcall shiftTime
 
     inc dTenSeconds
@@ -586,6 +601,12 @@ overflow6:
 
     rcall send_hours
 
+    #ifdef TWELVE_HOUR_INDICATE_DECIMAL
+        ldi r18,$03
+        mov r19, dIndPM
+        rcall shiftTime     ; Send seconds digit after send_hours updates AM/PM register
+    #endif
+
     out SREG,r15
     reti
 
@@ -608,6 +629,12 @@ overflow8:
     clr dHours
 
     rcall send_hours
+
+    #ifdef TWELVE_HOUR_INDICATE_DECIMAL
+        ldi r18,$03
+        mov r19, dIndPM
+        rcall shiftTime     ; Send seconds digit after send_hours updates AM/PM register
+    #endif
 
     ;inc dDays
     mov r18,dTenDays
@@ -841,7 +868,7 @@ init:
     clr dTenMinutes
     clr dMinutes
     clr dTenSeconds
-    ldi dSeconds, 0b10000000    ; Seconds get decimal point set
+    clr dSeconds
     clr dDeciSeconds
     clr dCentiSeconds
 
@@ -874,6 +901,7 @@ init:
     rcall shiftDate
 
     // Initialize time display (all dashes)
+    clr dIndPM
     ldi r18,$08
     ldi r19,10
     rcall shiftTime
@@ -910,9 +938,9 @@ init:
         sts tenDays,r16
         ldi r16,5               ; day
         sts days,r16
-        ldi r16,2               ; 10 hour
+        ldi r16,1               ; 10 hour
         sts tenHours,r16
-        ldi r16,3               ; hour
+        ldi r16,1               ; hour
         sts hours,r16
         ldi r16,5               ; 10 minute
         sts tenMinutes,r16
@@ -920,7 +948,7 @@ init:
         sts minutes,r16
         ldi r16,5               ; 10 second
         sts tenSeconds,r16
-        ldi r16,5 +0b10000000   ; second (plus decimal point)
+        ldi r16,5               ; second
         sts seconds,r16
         ldi r16,0               ; decisecond
         sts deciSeconds,r16
@@ -928,7 +956,7 @@ init:
         sts centiSeconds,r16
 
         // Set timezone
-        #ifndef TWELVE_HOUR
+        #ifndef TWELVE_HOUR_INDICATE_ZONE
             ldi r16, 0b10000000
             mov dGMT, r16
             clr dBST
@@ -1056,7 +1084,7 @@ main:
 
         rcall receiveByte
         andi r20,$0F
-        ori r20,0b10000000
+        //ori r20,0b10000000
         sts seconds,r20
 
         rcall receiveByte; dot
@@ -1114,7 +1142,7 @@ main:
         rcall receiveByte
         andi r20,$0F
         add fullMonths,r20
-        ori r20,0b10000000
+        ori r20,0b10000000  ; months RAM location holds the months digit plus the decimal point for the hyphen display.  It is not used for calculations.
         sts months,r20
 
         rcall receiveByte
@@ -1130,7 +1158,7 @@ main:
         rcall receiveByte
         andi r20,$0F
         add fullYears,r20
-        ori r20,0b10000000
+        ori r20,0b10000000  ; years RAM location holds the years digit plus the decimal point for the hyphen display.  It is not used for calculations.
         sts years,r20
 
 
@@ -1593,7 +1621,7 @@ main:
 
         sendAll:
         // Indicate GMT
-        #ifndef TWELVE_HOUR
+        #ifndef TWELVE_HOUR_INDICATE_ZONE
             ldi r20,0b10000000
             mov dGMT,r20
             clr dBST
@@ -1607,7 +1635,7 @@ main:
             clr dGMT
             clr dBST
         #else
-            #ifndef TWELVE_HOUR
+            #ifndef TWELVE_HOUR_INDICATE_ZONE
                 ldi r20,0b10000000
                 mov dBST,r20
                 clr dGMT
@@ -1702,7 +1730,7 @@ main:
 
         sendAll:
         // Indicate base timezone
-        #ifndef TWELVE_HOUR
+        #ifndef TWELVE_HOUR_INDICATE_ZONE
             ldi r20,0b10000000
             mov dGMT,r20
             clr dBST
@@ -1844,7 +1872,7 @@ main:
             clr dGMT
             clr dBST
         #else
-            #ifndef TWELVE_HOUR
+            #ifndef TWELVE_HOUR_INDICATE_ZONE
                 ldi r20,0b10000000
                 mov dBST,r20
                 clr dGMT
@@ -1863,7 +1891,7 @@ main:
 
         sendAll:
         // Indicate base timezone
-        #ifndef TWELVE_HOUR
+        #ifndef TWELVE_HOUR_INDICATE_ZONE
             ldi r20,0b10000000
             mov dGMT,r20
             clr dBST
@@ -2007,7 +2035,7 @@ main:
             clr dGMT
             clr dBST
         #else
-            #ifndef TWELVE_HOUR
+            #ifndef TWELVE_HOUR_INDICATE_ZONE
                 ldi r20,0b10000000
                 mov dBST,r20
                 clr dGMT
@@ -2067,6 +2095,11 @@ sendAll2:
         rcall shiftTime
         ldi r18,$03
         mov r19,dSeconds
+        #ifdef TWELVE_HOUR_INDICATE_DECIMAL ; Control seconds decimal point
+            or r19, dIndPM
+        #else
+            ori r19, 0b10000000
+        #endif
         rcall shiftTime
 
         rjmp main
@@ -2099,18 +2132,6 @@ waitForComma:
     brne waitForComma
     ret
 
-// Send GMT/BST indicator to display
-set_indicator:
-    ldi r18,$01
-    mov r19,dDays
-    or r19,dBST         ; Include BST indicator state (driven by 1 day decimal point)
-    rcall shiftDate
-    ldi r18,$02
-    mov r19,dTenDays
-    or r19,dGMT         ; Include GMT indicator state (driven by 10 day decimal point)
-    rcall shiftDate
-    ret
-
 
 // Send hour data to display
 // In 12-hour mode, this will handle the necessary conversions while allowing the clock to run in 24-hour mode internally.
@@ -2140,18 +2161,29 @@ send_hours:
         send_hours_test1:
         cpi r20, 12
         brsh send_hours_test2
-            // Hour below 12 (0..11) - Set AM (GMT)
-            ldi r16, 0b10000000
-            mov dGMT, r16
-            clr dBST
+            // Hour below 12 (0..11) - AM
+            #ifdef TWELVE_HOUR_INDICATE_DECIMAL
+                clr dIndPM
+            #endif
+            #ifdef TWELVE_HOUR_INDICATE_ZONE
+                ldi r16, 0b10000000
+                mov dGMT, r16
+                clr dBST
+            #endif
 
         send_hours_test2:
         cpi r20, 12
         brlo send_hours_test3
-            // Hour above 11 (12..24) - Set PM (BST)
-            ldi r16, 0b10000000
-            mov dBST, r16
-            clr dGMT
+            // Hour above 11 (12..24) - PM
+            #ifdef TWELVE_HOUR_INDICATE_DECIMAL
+                ldi r16, 0b10000000
+                mov dIndPM, r16                
+            #endif
+            #ifdef TWELVE_HOUR_INDICATE_ZONE
+                ldi r16, 0b10000000
+                mov dBST, r16
+                clr dGMT
+            #endif
 
         send_hours_test3:
         cpi r20, 0
@@ -2182,8 +2214,18 @@ send_hours:
         mov r19, r21
         rcall shiftTime     ; Ten hours
 
-        // Set GMT/BST indicator as well
-        rcall set_indicator
+        #ifdef TWELVE_HOUR_INDICATE_ZONE
+            // Set timezone indicators as well
+            ldi r18,$01
+            mov r19,dDays
+            or r19,dBST         ; Include BST indicator state (driven by 1 day decimal point)
+            rcall shiftDate
+            ldi r18,$02
+            mov r19,dTenDays
+            or r19,dGMT         ; Include GMT indicator state (driven by 10 day decimal point)
+            rcall shiftDate
+        #endif
+
         ret
     #endif
 
