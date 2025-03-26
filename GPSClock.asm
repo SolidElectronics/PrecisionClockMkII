@@ -11,8 +11,8 @@
 // Show time in 12-hour format
 #define TWELVE_HOUR
 // 12-hour AM/PM indicator (select one)
-#define TWELVE_HOUR_INDICATE_DECIMAL ; Use seconds decimal point for PM (for clocks without fractional seconds)
-// #define TWELVE_HOUR_INDICATE_ZONE    ; Takeover GMT/BST indicators for AM/PM
+// #define TWELVE_HOUR_INDICATE_DECIMAL ; Use seconds decimal point for PM (for clocks without fractional seconds)
+#define TWELVE_HOUR_INDICATE_ZONE    ; Takeover GMT/BST indicators for AM/PM
 //////////////
 // Timezone
 // #define BASE_TZ_OFFSET     0
@@ -441,6 +441,9 @@ USI_OVERFLOW:
 EE_READY:
 WDT_OVERFLOW:
 
+// Any ISR not explicitly handled will fall through to here and trigger a reset
+rjmp reset
+
 
 ; -----------------------------------------------------------------------------
 ;   ISR to increment digits (rollover) and send data to displays.
@@ -507,7 +510,9 @@ overflow2:
     rcall shiftTime
 
     inc dSeconds
-    cpi dSeconds, 10
+    cpi dSeconds, 10                ; Branch when seconds register reaches 10
+    breq overflow3
+    cpi dSeconds, 10 + 0b10000000   ; Also branch at 10 with decimal point set in MSB
     breq overflow3
 
     ldi r18,$03
@@ -918,7 +923,7 @@ init:
     ldi r19,10
     rcall shiftTime
     ldi r18,$03
-    ldi r19,10
+    ldi r19, 10 + 0b10000000    ; Start with seconds decimal point on
     rcall shiftTime
 
 
