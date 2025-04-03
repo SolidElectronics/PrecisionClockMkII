@@ -440,6 +440,8 @@ USI_OVERFLOW:
 EE_READY:
 WDT_OVERFLOW:
 
+// Any ISR not explicitly handled will fall through to here and trigger a reset
+rjmp reset
 
 ; -----------------------------------------------------------------------------
 ;   ISR to increment digits (rollover) and send data to displays.
@@ -468,7 +470,7 @@ rollover:
 overflow1:
     // 1/100 seconds digit 9 -> 0 (10Hz)
     lds r19, fix            ; Update fixDisplay from 'fix' value.  fix is alternated every second in timingAdjust routine (when PPS signal present)
-    sts fixDisplay, r19     ; Save back to fixDisplay memory location (this is the only place it's set)
+    sts fixDisplay, r19     ; Save back to fixDisplay memory location (this is the only place it gets set)
 
     // Update this digit to zero (lower digit just rolled over)
     clr dCentiSeconds
@@ -520,7 +522,9 @@ overflow2:
     rcall shiftTime
 
     inc dSeconds
-    cpi dSeconds, 10
+    cpi dSeconds, 10                ; Branch when seconds register reaches 10
+    breq overflow3
+    cpi dSeconds, 10 + 0b10000000   ; Also branch at 10 with decimal point set in MSB
     breq overflow3
 
     ldi r18,$03
@@ -790,7 +794,6 @@ init:
         out OSCCAL, r16
     nop
 
-    // Start with colons on
     ldi r16, 0b10000000
     sts fix, r16
     mov dLastPacketTime, r16
@@ -933,7 +936,7 @@ init:
     ldi r19,10
     rcall shiftTime
     ldi r18,$03
-    ldi r19,10
+    ldi r19, 10 + 0b10000000    ; Start with seconds decimal point on
     rcall shiftTime
 
 
