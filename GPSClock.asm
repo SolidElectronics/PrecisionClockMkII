@@ -1,26 +1,25 @@
-//////////////
 // Debug mode - free-running clock with no GPS input
 // #define DEBUG
-//////////////
+
 // Permanent DST / use jumper for manual DST control
 // #define NO_DST
-//////////////
-// Disable blinking colons
-// #define DISABLE_BLINKING_ENTIRELY
-//////////////
+
+// Colon blinking options
+//#define DISABLE_BLINKING_ENTIRELY       ; Don't blink at all
+#define COLONS_ON_FIX                   ; Colons will be off with no fix, and on with fix.  They do not blink.
+#define FIX_TIMEOUT 5                   ; Timeout until colons turn off with no GPS data
+
 // Show time in 12-hour format
-#define TWELVE_HOUR
+// #define TWELVE_HOUR
 // 12-hour AM/PM indicator (select one)
-#define TWELVE_HOUR_INDICATE_DECIMAL ; Use seconds decimal point for PM (for clocks without fractional seconds)
+// #define TWELVE_HOUR_INDICATE_DECIMAL ; Use seconds decimal point for PM (for clocks without fractional seconds)
 // #define TWELVE_HOUR_INDICATE_ZONE    ; Takeover GMT/BST indicators for AM/PM
-//////////////
+
 // Timezone
 // #define BASE_TZ_OFFSET     0
 // #define FRACTIONAL_OFFSET 45
-//
 // #define TZ_LONDON
 #define TZ_US_EASTERN
-//////////////
 
 /*
 Pin Configurations:
@@ -341,16 +340,16 @@ seconds decimal: 1 second
 .def dYears = r4
 .def dTenYears = r5
 
-
 .def fullYears = r6
 .def fullMonths = r7
 .def daysInMonth = r8    ;BCD
+.def daysInLastMonth = r9    ;BCD
 
-.def dGMT = r9
-.def dBST = r10
-.def dIndPM = r11
+.def dGMT = r10
+.def dBST = r11
+.def dIndPM = r12
+.def dLastPacketTime = r13
 
-.def daysInLastMonth = r12    ;BCD
 
 // Start data segment - declare memory allocations
 .dseg
@@ -469,7 +468,7 @@ rollover:
 overflow1:
     // 1/100 seconds digit 9 -> 0 (10Hz)
     lds r19, fix            ; Update fixDisplay from 'fix' value.  fix is alternated every second in timingAdjust routine (when PPS signal present)
-    sts fixDisplay, r19     ; Save back to fixDisplay memory location (this is the only place it gets set)
+    sts fixDisplay, r19     ; Save back to fixDisplay memory location (this is the only place it's set)
 
     // Update this digit to zero (lower digit just rolled over)
     clr dCentiSeconds
@@ -498,6 +497,20 @@ overflow1:
 
 overflow2:
     // 1/10 seconds digit 9 -> 0 (1Hz)
+    
+    #ifdef COLONS_ON_FIX
+        // See if we still have a valid GPS fix (timeout not elapsed)
+        inc dLastPacketTime
+        ldi r18, FIX_TIMEOUT
+        cp dLastPacketTime, r18
+        brsh ovf2_fix   // LastPacketTime >= FIX_TIMEOUT
+            mov dLastPacketTime, r18     // Cap value so it can't overflow
+            ldi r18, 0
+            sts fix, r18                // If timeout has elapsed, turn colons off.  They'll be turned back on when PPS signal returns.
+
+        ovf2_fix:
+    #endif
+
     clr dDeciSeconds
     ldi r18,$02
     lds r19,fixDisplay      ; Pre-load H/M colon state (driven from deciseconds)
@@ -777,8 +790,10 @@ init:
         out OSCCAL, r16
     nop
 
+    // Start with colons on
     ldi r16, 0b10000000
     sts fix, r16
+    mov dLastPacketTime, r16
 
     ldi r16, 0b00000000
     sts dataValid, r16
@@ -1555,13 +1570,13 @@ main:
                 cp fullMonths,r20
                 breq isDSTStartMonth
                 brcs PC+2 
-                rjmp addHour
+                    rjmp addHour
     
                 ldi r20, DST_END_MONTH
                 cp fullMonths,r20
                 breq isDSTEndMonth
                 brcc PC+2
-                rjmp addHour
+                    rjmp addHour
 
                 rjmp sendAll
 
@@ -1774,10 +1789,10 @@ main:
         add r20, dHours
         cpi dTenHours, 2
         brne PC+2
-        subi r20, -20
+            subi r20, -20
         cpi dTenHours, 1
         brne PC+2
-        subi r20, -10
+            subi r20, -10
 
         clr dTenHours
 
@@ -1932,10 +1947,10 @@ main:
         add r20, dHours
         cpi dTenHours, 2
         brne PC+2
-        subi r20, -20
+            subi r20, -20
         cpi dTenHours, 1
         brne PC+2
-        subi r20, -10
+            subi r20, -10
 
         clr dTenHours
 
@@ -2248,7 +2263,7 @@ shiftTime:
         cpi r18, $08    ; Are we updating the ten hour digit
         cpc r16, r19    ; Is it zero
         brne PC+2
-        ldi R19, 0x0F   ; Blank
+            ldi R19, 0x0F   ; Blank
     #endif
     
     shiftTimeLoop:
@@ -2348,10 +2363,17 @@ timingAdjust:
     // This is what causes the colons to blink, and only runs when a valid PPS signal is present, triggering this ISR.
     // Display routine loads 'fix' value into 'fixDisplay' and uses that to control whether the decimal points driving the colons are on or off.
     // Changes state of 'fix' in memory every time this routine gets called.  Alternates between 0 and 0b10000000 to set decimal point driver connected to colon LEDs
-    lds ZL,fix          ; Load current fix value
-    lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
-    eor ZL,ZH           ; XOR toggles
-    sts fix,ZL          ; Save to RAM
+    #ifndef COLONS_ON_FIX
+        lds ZL,fix          ; Load current fix value
+        lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
+        eor ZL,ZH           ; XOR toggles
+        sts fix,ZL          ; Save to RAM
+    # else
+        ldi ZL, 0
+        mov dLastPacketTime, ZL    // Zero seconds since last GPS packet
+        ldi ZL, 0b10000000
+        sts fix, ZL               // Colons always on when fix present in COLONS_ON_FIX mode
+    #endif
 
     cpi dDeciSeconds, 5
     brcc timingSlow
