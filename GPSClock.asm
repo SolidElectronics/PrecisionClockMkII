@@ -505,11 +505,10 @@ overflow2:
         inc dLastPacketTime
         ldi r18, FIX_TIMEOUT
         cp dLastPacketTime, r18
-        brsh ovf2_fix   // LastPacketTime >= FIX_TIMEOUT
+        brlo ovf2_fix   // Branch if LastPacketTime < FIX_TIMEOUT
             mov dLastPacketTime, r18     // Cap value so it can't overflow
             ldi r18, 0
             sts fix, r18                // If timeout has elapsed, turn colons off.  They'll be turned back on when PPS signal returns.
-
         ovf2_fix:
     #endif
 
@@ -795,11 +794,15 @@ init:
     nop
 
     ldi r16, 0b10000000
-    sts fix, r16
-    mov dLastPacketTime, r16
+    ldi r17, 0b00000000
 
-    ldi r16, 0b00000000
-    sts dataValid, r16
+    #ifdef COLONS_ON_FIX
+        sts fix, r17    // Start with colons off
+    #else
+        sts fix, r16    // Start with colons on
+    #endif
+    mov dLastPacketTime, r16
+    sts dataValid, r17
 
     // Timer/Counter1 using CLK/8 (=1MHz), clear timer on compare match
     ldi r16, (1<<WGM12|1<<CS11) ;
