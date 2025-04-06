@@ -4,6 +4,15 @@
 // Permanent DST / use jumper for manual DST control
 // #define NO_DST
 
+// Board version 2
+// This section contains settings only applicable to the new board version with digital brightness control.
+// If unset, the binary remains compatible with existing/old boards.
+#define BOARD_V2
+#define BOARD_V2_PWM_LOW    16
+#define BOARD_V2_PWM_HIGH   255
+#define BOARD_V2_DIGIT_LOW  3
+#define BOARD_V2_DIGIT_HIGH 15
+
 // Colon blinking options
 //#define DISABLE_BLINKING_ENTIRELY       ; Don't blink at all
 #define COLONS_ON_FIX                   ; Colons will be off with no fix, and on with fix.  They do not blink.
@@ -37,6 +46,7 @@ ATTINY2313
 9   PD5 DisplayTest
 10  GND
 
+# Original board version 1
 11  PD6 DST_ENABLE
 12  PB0 SPI_DATA
 13  PB1 SPI_CLK
@@ -47,6 +57,19 @@ ATTINY2313
 18  PB6 -
 19  PB7 -
 20  VCC
+
+# Board version 2 (digital brightness)
+11  PD6 DST_ENABLE
+12  PB0 AIN0 (LDR In)    
+13  PB1 AIN1 (LDR Threshold)   
+14  PB2 OC0A (Colon PWM)        
+15  PB3 SPI_DATA
+16  PB4 SPI_CLK
+17  PB5 LD_TIME
+18  PB6 LD_DATE
+19  PB7 -
+20  VCC
+
 
 
 
@@ -67,10 +90,22 @@ seconds decimal: 1 second
 ; -----------------------------------------------------------------------------
 
 // PortB output pins
-#define PORTB_SPI_DATA          0
-#define PORTB_SPI_CLK           1
-#define PORTB_LD_TIME           2
-#define PORTB_LD_DATE           3
+#ifndef BOARD_V2
+    // Version 1
+    #define PORTB_SPI_DATA          0
+    #define PORTB_SPI_CLK           1
+    #define PORTB_LD_TIME           2
+    #define PORTB_LD_DATE           3
+#else
+    // Version 2
+    #define PORTB_AIN0              0
+    #define PORTB_AIN1              1
+    #define PORTB_COLON_PWM         2
+    #define PORTB_SPI_DATA          3
+    #define PORTB_SPI_CLK           4
+    #define PORTB_LD_TIME           5
+    #define PORTB_LD_DATE           6
+#endif
 
 // PortD input pins
 #define PORTD_UTC_XTAL          1
@@ -486,6 +521,11 @@ overflow1:
     cpi dDeciSeconds,10
     breq overflow2
 
+    // Colons on at 5/10
+    //cpi dDeciSeconds, 5
+    //brlo PC+2
+    //    rcall boardv2_colons_on
+
     // Next most significant digit didn't rollover, but does need updating on the display.
     ldi r18,$02
     lds r19,fixDisplay      ; Pre-load H/M colon state (driven from deciseconds)
@@ -500,6 +540,11 @@ overflow1:
 overflow2:
     // 1/10 seconds digit 9 -> 0 (1Hz)
     
+    // Check and set brightness
+    #ifdef BOARD_V2
+        rcall boardv2_check_ldr
+    #endif
+
     #ifdef COLONS_ON_FIX
         // See if we still have a valid GPS fix (timeout not elapsed)
         inc dLastPacketTime
@@ -827,7 +872,12 @@ init:
 
     // Setup I/O pins
     // Port B outputs to MAX7219
-    ldi r16, (1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)
+    #ifdef BOARD_V2
+        ldi r16, (1<<PORTB_COLON_PWM | 1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)
+    #else
+        ldi r16, (1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)
+    #endif
+
     out DDRB,r16
     ldi r16,0
     out PORTB,r16
@@ -882,6 +932,20 @@ init:
     ldi r18,$0C ; Shutdown/normal
     ldi r19,$01 ; Normal operation
     rcall shiftBoth
+
+    #ifdef BOARD_V2
+        // Setup Timer/Counter0 for fast PWM to control colon LEDs rather than rely on MAX7219.
+        // Outputs PWM signal to OCA0 (pin 14).  No interrupts needed.
+        ldi r16, (1<<CS00)                      ; Full speed clock for PWM
+        out TCCR0B, r16
+        rcall boardv2_colons_on                 ; Start with colons on
+        rcall boardv2_brightness_high           ; Start with high brightness
+
+        // Setup analog comparator for brightness sensor
+        // To use this, we should just need to read the ACO bit (5) from the status register ACSR
+        ldi r16, (1<<AIN0D | 1<<AIN1D)
+        out DIDR, r16
+    #endif
 
     // Zero out digit registers
     clr dTenHours
@@ -2250,6 +2314,50 @@ send_hours:
         ret
     #endif
 
+; -----------------------------------------------------------------------------
+; FUNCTION DEFINITIONS FOR V2 BOARD
+; -----------------------------------------------------------------------------
+
+#ifdef BOARD_V2
+    // Set display brightness high
+    boardv2_brightness_high:
+        ldi r16, BOARD_V2_PWM_HIGH
+        out OCR0A, r16
+        ldi r18, $0A    ; Intensity
+        ldi r19, BOARD_V2_DIGIT_HIGH
+        rcall shiftBoth
+        ret
+
+    // Set display brightness low
+    boardv2_brightness_low:
+        ldi r16, BOARD_V2_PWM_LOW
+        out OCR0A, r16
+        ldi r18, $0A    ; Intensity
+        ldi r19, BOARD_V2_DIGIT_LOW
+        rcall shiftBoth
+        ret
+
+    boardv2_colons_on:
+        ldi r16, (1<<COM0A1|1<<WGM01|1<<WGM00)  ; Clear OC0A on Compare Match, set OC0A at TOP
+        out TCCR0A, r16
+        ret
+
+    boardv2_colons_off:
+        ldi r16, (0<<COM0A1|1<<WGM01|1<<WGM00)  ; Normal port operation, OC0A disconnected
+        out TCCR0A, r16
+        ret
+
+    // Use analog comparator to determine LDR state and adjust brightness
+    boardv2_check_ldr:
+        in r16, ACSR
+        sbrs r16, ACO
+        rjmp boardv2_check_ldr_low
+        rcall boardv2_brightness_high
+        ret
+        boardv2_check_ldr_low:
+        rcall boardv2_brightness_low
+        ret
+#endif
 
 ; -----------------------------------------------------------------------------
 ;   MAX7219 driver
