@@ -7,15 +7,16 @@
 // Board version 2
 // This section contains settings only applicable to the new board version with digital brightness control.
 // If unset, the binary remains compatible with existing/old boards.
-#define BOARD_V2
-#define BOARD_V2_PWM_LOW    16
-#define BOARD_V2_PWM_HIGH   255
-#define BOARD_V2_DIGIT_LOW  3
-#define BOARD_V2_DIGIT_HIGH 15
+//#define BOARD_V2
+//#define BOARD_V2_PWM_LOW    16
+//#define BOARD_V2_PWM_HIGH   255
+//#define BOARD_V2_DIGIT_LOW  3
+//#define BOARD_V2_DIGIT_HIGH 15
 
 // Colon blinking options
+// If none of these are set, the default behaviour blinks at 0.5 Hz when GPS signal present.
 //#define DISABLE_BLINKING_ENTIRELY       ; Don't blink at all
-#define COLONS_ON_FIX                   ; Colons will be off with no fix, and on with fix.  They do not blink.
+#define COLONS_ON_FIX                   ; Colons will be off with no fix, and on with fix.  No blinking.  Set FIX_TIMEOUT to control no-signal delay.
 #define FIX_TIMEOUT 5                   ; Timeout until colons turn off with no GPS data
 
 // Show time in 12-hour format
@@ -552,8 +553,13 @@ overflow2:
         cp dLastPacketTime, r18
         brlo ovf2_fix   // Branch if LastPacketTime < FIX_TIMEOUT
             mov dLastPacketTime, r18     // Cap value so it can't overflow
-            ldi r18, 0
-            sts fix, r18                // If timeout has elapsed, turn colons off.  They'll be turned back on when PPS signal returns.
+            // If timeout has elapsed, turn colons off.  They'll be turned back on when PPS signal returns.
+            #ifdef BOARD_V2
+                rcall boardv2_colons_off
+            #else
+                ldi r18, 0
+                sts fix, r18
+            #endif
         ovf2_fix:
     #endif
 
@@ -938,8 +944,12 @@ init:
         // Outputs PWM signal to OCA0 (pin 14).  No interrupts needed.
         ldi r16, (1<<CS00)                      ; Full speed clock for PWM
         out TCCR0B, r16
-        rcall boardv2_colons_on                 ; Start with colons on
         rcall boardv2_brightness_high           ; Start with high brightness
+        #ifdef COLONS_ON_FIX
+            rcall boardv2_colons_off            ; Start with colons off
+        #else
+            rcall boardv2_colons_on             ; Start with colons on
+        #endif
 
         // Setup analog comparator for brightness sensor
         // To use this, we should just need to read the ACO bit (5) from the status register ACSR
@@ -2347,6 +2357,13 @@ send_hours:
         out TCCR0A, r16
         ret
 
+     boardv2_colons_toggle:
+        in r16, TCCR0A
+        ldi r17, (1<<COM0A1)
+        eor r16, r17
+        out TCCR0A, r16
+        ret
+
     // Use analog comparator to determine LDR state and adjust brightness
     boardv2_check_ldr:
         in r16, ACSR
@@ -2477,16 +2494,28 @@ timingAdjust:
     // This is what causes the colons to blink, and only runs when a valid PPS signal is present, triggering this ISR.
     // Display routine loads 'fix' value into 'fixDisplay' and uses that to control whether the decimal points driving the colons are on or off.
     // Changes state of 'fix' in memory every time this routine gets called.  Alternates between 0 and 0b10000000 to set decimal point driver connected to colon LEDs
-    #ifndef COLONS_ON_FIX
-        lds ZL,fix          ; Load current fix value
-        lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
-        eor ZL,ZH           ; XOR toggles
-        sts fix,ZL          ; Save to RAM
-    # else
+    #ifdef COLONS_ON_FIX
+        // Colons always on when fix present in COLONS_ON_FIX mode
         ldi ZL, 0
         mov dLastPacketTime, ZL    // Zero seconds since last GPS packet
-        ldi ZL, 0b10000000
-        sts fix, ZL               // Colons always on when fix present in COLONS_ON_FIX mode
+        #ifdef BOARDV2
+            rcall boardv2_colons_on
+        #else
+            ldi ZL, 0b10000000
+            sts fix, ZL             // Pre-load 'fix' with bit 7 on for decimal point (colon)
+        #endif
+    # else
+        // Toggle colons
+        #ifdef BOARD_V2
+            #ifndef DISABLE_BLINKING_ENTIRELY
+                rcall boardv2_colons_toggle
+            #endif
+        #else
+            lds ZL,fix          ; Load current fix value
+            lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
+            eor ZL,ZH           ; XOR toggles
+            sts fix,ZL          ; Save to RAM
+        #endif
     #endif
 
     cpi dDeciSeconds, 5
