@@ -4,15 +4,6 @@
 // Permanent DST / use jumper for manual DST control
 // #define NO_DST
 
-// Board version 2
-// This section contains settings only applicable to the new board version with digital brightness control.
-// If unset, the binary remains compatible with existing/old boards.
-//#define BOARD_V2
-//#define BOARD_V2_PWM_LOW    16
-//#define BOARD_V2_PWM_HIGH   255
-//#define BOARD_V2_DIGIT_LOW  3
-//#define BOARD_V2_DIGIT_HIGH 15
-
 // Colon blinking options
 // If none of these are set, the default behaviour blinks at 0.5 Hz when GPS signal present.
 //#define DISABLE_BLINKING_ENTIRELY       ; Don't blink at all
@@ -31,11 +22,23 @@
 // #define TZ_LONDON
 #define TZ_US_EASTERN
 
+// Board version 2
+// These settings are only applicable to the new board version with digital brightness control.
+// If unset, the binary remains compatible with existing/old boards.
+#define BOARD_V2
+#define BOARD_V2_PWM_LOW    16
+#define BOARD_V2_PWM_HIGH   255
+#define BOARD_V2_DIGIT_LOW  3
+#define BOARD_V2_DIGIT_HIGH 15
+
+
 /*
 Pin Configurations:
 
 ATTINY2313
 
+# Original board version 1
+# -------------------------------------
 1   RESET
 2   PD0 GPS_DATA
 3   PD1 - [UTC Mode with Crystal]
@@ -47,7 +50,6 @@ ATTINY2313
 9   PD5 DisplayTest
 10  GND
 
-# Original board version 1
 11  PD6 DST_ENABLE
 12  PB0 SPI_DATA
 13  PB1 SPI_CLK
@@ -59,7 +61,23 @@ ATTINY2313
 19  PB7 -
 20  VCC
 
-# Board version 2 (digital brightness)
+
+# Board version 2
+# With digital brightness control.  Needed to move MAX7219 driver lines because
+# this version requires using the analog comparator (AIN0/AIN1) and
+# timer/counter0 output (OC0A) which conflicted with the original pinout.
+# -------------------------------------
+1   RESET
+2   PD0 GPS_DATA
+3   PD1 - [UTC Mode with Crystal]
+4   PA1 [ XTAL ] UTC Mode (without crystal)
+5   PA0 [ XTAL ] PermaDST (without crystal)
+6   PD2 PPS
+7   PD3 - [PermaDST with Crystal]
+8   PD4 - GMT
+9   PD5 DisplayTest
+10  GND
+
 11  PD6 DST_ENABLE
 12  PB0 AIN0 (LDR In)    
 13  PB1 AIN1 (LDR Threshold)   
@@ -68,10 +86,8 @@ ATTINY2313
 16  PB4 SPI_CLK
 17  PB5 LD_TIME
 18  PB6 LD_DATE
-19  PB7 -
+19  PB7 - BST
 20  VCC
-
-
 
 
 MAX7219 decimal point wiring
@@ -106,6 +122,9 @@ seconds decimal: 1 second
     #define PORTB_SPI_CLK           4
     #define PORTB_LD_TIME           5
     #define PORTB_LD_DATE           6
+    #define PORTB_BST               7
+
+    #define PORTD_GMT               4
 #endif
 
 // PortD input pins
@@ -522,11 +541,6 @@ overflow1:
     cpi dDeciSeconds,10
     breq overflow2
 
-    // Colons on at 5/10
-    //cpi dDeciSeconds, 5
-    //brlo PC+2
-    //    rcall boardv2_colons_on
-
     // Next most significant digit didn't rollover, but does need updating on the display.
     ldi r18,$02
     lds r19,fixDisplay      ; Pre-load H/M colon state (driven from deciseconds)
@@ -548,12 +562,14 @@ overflow2:
 
     #ifdef COLONS_ON_FIX
         // See if we still have a valid GPS fix (timeout not elapsed)
+        // dLastPacketTime is incremented here, but reset to zero in the GPS packet handler routine.
+        // If it exceeds FIX_TIMEOUT then we've lost the GPS signal and should execute this code.
         inc dLastPacketTime
         ldi r18, FIX_TIMEOUT
         cp dLastPacketTime, r18
-        brlo ovf2_fix   // Branch if LastPacketTime < FIX_TIMEOUT
-            mov dLastPacketTime, r18     // Cap value so it can't overflow
-            // If timeout has elapsed, turn colons off.  They'll be turned back on when PPS signal returns.
+        brlo ovf2_fix
+            mov dLastPacketTime, r18     // Cap value at FIX_TIMEOUT so it can't overflow
+            // Timeout elapsed, turn colons off.
             #ifdef BOARD_V2
                 rcall boardv2_colons_off
             #else
@@ -877,18 +893,28 @@ init:
     out GIMSK,r16
 
     // Setup I/O pins
-    // Port B outputs to MAX7219
+    ldi r16,0
+
+    // Port B
     #ifdef BOARD_V2
-        ldi r16, (1<<PORTB_COLON_PWM | 1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)
+        ldi r17, (1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE | 1<<PORTB_COLON_PWM | 1<<PORTB_BST)
+        out DDRB,r17
     #else
-        ldi r16, (1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)
+        ldi r17, (1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)
+        out DDRB,r17
+    #endif
+    out PORTB,r16
+
+    // Port D
+    #ifdef BOARD_V2
+        ldi r17, (1<<PORTD_GMT)
+        out DDRD, r17
+        out PORTD, r16
+    #else
+        out DDRD,r16
     #endif
 
-    out DDRB,r16
-    ldi r16,0
-    out PORTB,r16
-    // Set Port A and Port D to all input
-    out DDRD,r16
+    // Port A
     out DDRA,r16
 
     // Enable pullups on inputs (DDRxn=0, PORTxn=1)
@@ -955,6 +981,10 @@ init:
         // To use this, we should just need to read the ACO bit (5) from the status register ACSR
         ldi r16, (1<<AIN0D | 1<<AIN1D)
         out DIDR, r16
+
+        // Start with both indicators on, will update to correct states when GPS data arrives.
+        sbi PORTD, PORTD_GMT
+        sbi PORTB, PORTB_BST
     #endif
 
     // Zero out digit registers
@@ -2197,6 +2227,17 @@ sendAll2:
         #endif
         rcall shiftTime
 
+        #ifdef BOARD_V2
+            // Set MCU controlled GMT/BST indicators to match register values
+            cbi PORTD, PORTD_GMT
+            sbrc dGMT, 7
+                sbi PORTD, PORTD_GMT
+
+            cbi PORTB, PORTB_BST
+            sbrc dBST, 7
+                sbi PORTB, PORTB_BST
+        #endif
+
         rjmp main
 
 
@@ -2399,10 +2440,14 @@ shiftTime:
     
     shiftTimeLoop:
         cbi PORTB, PORTB_SPI_CLK    ; Clock low
-        ldi r16,(0<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)   ; Enable time load (low), disable date load (high)
-        sbrc r18, 7      ; Check next bit going out
-            ori r16, (1<<PORTB_SPI_DATA)    ; Set data high if next bit is high
-        out PORTB,r16   ; Send bit
+
+        cbi PORTB, PORTB_LD_TIME    ; Enable time load (low)
+        sbi PORTB, PORTB_LD_DATE    ; Disable date load (high)
+        sbrc r18, 7      ; Check next bit going out : high
+            sbi PORTB, PORTB_SPI_DATA   ; Set bit state on output
+        sbrs r18, 7      ; Check next bit going out : low
+            cbi PORTB, PORTB_SPI_DATA   ; Set bit state on output
+        
         lsl r19         ; Shift data byte left to get the next bit
         rol r18         ; Shift address byte left to get the next bit (why is this not LSL as well?)
         nop
@@ -2427,10 +2472,14 @@ shiftDate:
     ldi r17,16      ; 16 bits to output
     shiftDateLoop:
         cbi PORTB, PORTB_SPI_CLK    ; Clock low
-        ldi r16,(0<<PORTB_LD_DATE | 1<<PORTB_LD_TIME)   ; Enable date load (low), disable time load (high)
-        sbrc r18,7      ; Check next bit going out
-            ori r16, (1<<PORTB_SPI_DATA)    ; Set data high if next bit is high
-        out PORTB,r16   ; Send bit
+
+        cbi PORTB, PORTB_LD_DATE    ; Enable date load (low)
+        sbi PORTB, PORTB_LD_TIME    ; Disable time load (high)
+        sbrc r18, 7      ; Check next bit going out : high
+            sbi PORTB, PORTB_SPI_DATA   ; Set bit state on output
+        sbrs r18, 7      ; Check next bit going out : low
+            cbi PORTB, PORTB_SPI_DATA   ; Set bit state on output
+
         lsl r19         ; Shift data byte left to get the next bit
         rol r18         ; Shift address byte left to get the next bit
         nop
@@ -2455,10 +2504,14 @@ shiftBoth:
     ldi r17,16      ; 16 bits to output
     shiftBothLoop:
         cbi PORTB, PORTB_SPI_CLK    ; Clock low
-        clr r16         ; Set everything low to enable date load and time load.  Could replace with ldi r16,(0<<PORTB_LD_DATE | 0<<PORTB_LD_TIME)
-        sbrc r18,7      ; Check next bit going out
-            ori r16, (1<<PORTB_SPI_DATA)    ; Set data high if next bit is high
-        out PORTB,r16   ; Send bit
+
+        cbi PORTB, PORTB_LD_DATE    ; Enable date load (low)
+        cbi PORTB, PORTB_LD_TIME    ; Enable time load (low)
+        sbrc r18, 7      ; Check next bit going out : high
+            sbi PORTB, PORTB_SPI_DATA   ; Set bit state on output
+        sbrs r18, 7      ; Check next bit going out : low
+            cbi PORTB, PORTB_SPI_DATA   ; Set bit state on output
+
         lsl r19         ; Shift data byte left to get the next bit
         rol r18         ; Shift address byte left to get the next bit
         nop
@@ -2498,7 +2551,7 @@ timingAdjust:
         // Colons always on when fix present in COLONS_ON_FIX mode
         ldi ZL, 0
         mov dLastPacketTime, ZL    // Zero seconds since last GPS packet
-        #ifdef BOARDV2
+        #ifdef BOARD_V2
             rcall boardv2_colons_on
         #else
             ldi ZL, 0b10000000
