@@ -4,11 +4,24 @@
 // Permanent DST / use jumper for manual DST control
 // #define NO_DST
 
+// Crystal or internal RC oscillator.  Not supported on V2 boards.
+// #define USE_CRYSTAL
+
 // Colon blinking options
 // If none of these are set, the default behaviour blinks at 0.5 Hz when GPS signal present.
-//#define DISABLE_BLINKING_ENTIRELY       ; Don't blink at all
+// #define DISABLE_BLINKING_ENTIRELY       ; Don't blink at all
 #define COLONS_ON_FIX                   ; Colons will be off with no fix, and on with fix.  No blinking.  Set FIX_TIMEOUT to control no-signal delay.
 #define FIX_TIMEOUT 5                   ; Timeout until colons turn off with no GPS data
+
+// Board version 2
+// These settings are only applicable to the new board version with digital brightness control.
+// If unset, the binary remains compatible with existing/old boards.
+#define BOARD_V2
+// Options for board v2
+#define BOARD_V2_PWM_LOW    32
+#define BOARD_V2_PWM_HIGH   128
+#define BOARD_V2_DIGIT_LOW  3
+#define BOARD_V2_DIGIT_HIGH 15
 
 // Show time in 12-hour format
 // #define TWELVE_HOUR
@@ -21,15 +34,6 @@
 // #define FRACTIONAL_OFFSET 45
 // #define TZ_LONDON
 #define TZ_US_EASTERN
-
-// Board version 2
-// These settings are only applicable to the new board version with digital brightness control.
-// If unset, the binary remains compatible with existing/old boards.
-#define BOARD_V2
-#define BOARD_V2_PWM_LOW    16
-#define BOARD_V2_PWM_HIGH   255
-#define BOARD_V2_DIGIT_LOW  3
-#define BOARD_V2_DIGIT_HIGH 15
 
 
 /*
@@ -66,27 +70,28 @@ ATTINY2313
 # With digital brightness control.  Needed to move MAX7219 driver lines because
 # this version requires using the analog comparator (AIN0/AIN1) and
 # timer/counter0 output (OC0A) which conflicted with the original pinout.
+# Needed the extra pins so display test mode was removed.
 # -------------------------------------
 1   RESET
 2   PD0 GPS_DATA
 3   PD1 - [UTC Mode with Crystal]
-4   PA1 [ XTAL ] UTC Mode (without crystal)
-5   PA0 [ XTAL ] PermaDST (without crystal)
+4   PA1 [ XTAL ] UTC Mode
+5   PA0 [ XTAL ] PermaDST
 6   PD2 PPS
 7   PD3 - [PermaDST with Crystal]
 8   PD4 - GMT
-9   PD5 DisplayTest
+9   PD5 - BST
 10  GND
 
 11  PD6 DST_ENABLE
 12  PB0 AIN0 (LDR In)    
 13  PB1 AIN1 (LDR Threshold)   
-14  PB2 OC0A (Colon PWM)        
+14  PB2 OC0A (PWM out)        
 15  PB3 SPI_DATA
 16  PB4 SPI_CLK
 17  PB5 LD_TIME
 18  PB6 LD_DATE
-19  PB7 - BST
+19  PB7 - Colon
 20  VCC
 
 
@@ -106,7 +111,6 @@ seconds decimal: 1 second
 ;   Declare pins
 ; -----------------------------------------------------------------------------
 
-// PortB output pins
 #ifndef BOARD_V2
     // Version 1
     #define PORTB_SPI_DATA          0
@@ -117,23 +121,24 @@ seconds decimal: 1 second
     // Version 2
     #define PORTB_AIN0              0
     #define PORTB_AIN1              1
-    #define PORTB_COLON_PWM         2
+    #define PORTB_PWM               2
     #define PORTB_SPI_DATA          3
     #define PORTB_SPI_CLK           4
     #define PORTB_LD_TIME           5
     #define PORTB_LD_DATE           6
-    #define PORTB_BST               7
+    #define PORTB_COLONS            7
 
-    #define PORTD_GMT               4
+    #define PORTD_GMT               3
+    #define PORTD_BST               4
 #endif
 
+// Common
 // PortD input pins
 #define PORTD_UTC_XTAL          1
 #define PORTD_PPS_IN            2
 #define PORTD_PERMADST_XTAL     3
 #define PORTD_DISPLAYTEST       5
 #define PORTD_DST_EN            6
-
 // PortA input pins
 #define PORTA_PERMADST_NOXTAL   0
 #define PORTA_UTC_NOXTAL        1
@@ -527,6 +532,11 @@ overflow1:
     lds r19, fix            ; Update fixDisplay from 'fix' value.  fix is alternated every second in timingAdjust routine (when PPS signal present)
     sts fixDisplay, r19     ; Save back to fixDisplay memory location (this is the only place it gets set)
 
+    // Check and set brightness
+    #ifdef BOARD_V2
+        rcall boardv2_check_ldr
+    #endif
+
     // Update this digit to zero (lower digit just rolled over)
     clr dCentiSeconds
     ldi r18,$01
@@ -571,7 +581,7 @@ overflow2:
             mov dLastPacketTime, r18     // Cap value at FIX_TIMEOUT so it can't overflow
             // Timeout elapsed, turn colons off.
             #ifdef BOARD_V2
-                rcall boardv2_colons_off
+                cbi PORTB, PORTB_COLONS
             #else
                 ldi r18, 0
                 sts fix, r18
@@ -897,7 +907,7 @@ init:
 
     // Port B
     #ifdef BOARD_V2
-        ldi r17, (1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE | 1<<PORTB_COLON_PWM | 1<<PORTB_BST)
+        ldi r17, (1<<PORTB_PWM | 1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE | 1<<PORTB_COLONS)
         out DDRB,r17
     #else
         ldi r17, (1<<PORTB_SPI_DATA | 1<<PORTB_SPI_CLK | 1<<PORTB_LD_TIME | 1<<PORTB_LD_DATE)
@@ -907,7 +917,7 @@ init:
 
     // Port D
     #ifdef BOARD_V2
-        ldi r17, (1<<PORTD_GMT)
+        ldi r17, (1<<PORTD_GMT | 1<<PORTD_BST)
         out DDRD, r17
         out PORTD, r16
     #else
@@ -957,8 +967,12 @@ init:
 
     ldi r18,$FF ; Display test
     ldi r19,$00 ; Off
-    sbis PIND, PORTD_DISPLAYTEST
-        inc r19 ; On
+    #ifndef BOARD_V2
+        ; This puts the MAX7219 into display test mode where it lights all digits.
+        ; Clock continues to run, but the display doesn't change.
+        sbis PIND, PORTD_DISPLAYTEST
+            inc r19 ; On
+    #endif
     rcall shiftBoth
 
     ldi r18,$0C ; Shutdown/normal
@@ -970,11 +984,14 @@ init:
         // Outputs PWM signal to OCA0 (pin 14).  No interrupts needed.
         ldi r16, (1<<CS00)                      ; Full speed clock for PWM
         out TCCR0B, r16
+        ldi r16, (1<<COM0A1|1<<WGM01|1<<WGM00)  ; Clear OC0A on Compare Match, set OC0A at TOP
+        out TCCR0A, r16
+
         rcall boardv2_brightness_high           ; Start with high brightness
         #ifdef COLONS_ON_FIX
-            rcall boardv2_colons_off            ; Start with colons off
+            cbi PORTB, PORTB_COLONS             ; Start with colons off
         #else
-            rcall boardv2_colons_on             ; Start with colons on
+            sbi PORTB, PORTB_COLONS             ; Start with colons on
         #endif
 
         // Setup analog comparator for brightness sensor
@@ -984,7 +1001,7 @@ init:
 
         // Start with both indicators on, will update to correct states when GPS data arrives.
         sbi PORTD, PORTD_GMT
-        sbi PORTB, PORTB_BST
+        sbi PORTD, PORTD_BST
     #endif
 
     // Zero out digit registers
@@ -2233,9 +2250,9 @@ sendAll2:
             sbrc dGMT, 7
                 sbi PORTD, PORTD_GMT
 
-            cbi PORTB, PORTB_BST
+            cbi PORTD, PORTD_BST
             sbrc dBST, 7
-                sbi PORTB, PORTB_BST
+                sbi PORTD, PORTD_BST
         #endif
 
         rjmp main
@@ -2372,37 +2389,28 @@ send_hours:
 #ifdef BOARD_V2
     // Set display brightness high
     boardv2_brightness_high:
-        ldi r16, BOARD_V2_PWM_HIGH
-        out OCR0A, r16
-        ldi r18, $0A    ; Intensity
+        ldi r16, 255 - BOARD_V2_PWM_HIGH
+        out OCR0A, r16                      ; Set PWM intensity
+        ldi r18, $0A                        ; Set MAX7219 intensity
         ldi r19, BOARD_V2_DIGIT_HIGH
         rcall shiftBoth
         ret
 
     // Set display brightness low
     boardv2_brightness_low:
-        ldi r16, BOARD_V2_PWM_LOW
-        out OCR0A, r16
-        ldi r18, $0A    ; Intensity
+        ldi r16, 255 - BOARD_V2_PWM_LOW
+        out OCR0A, r16                      ; Set PWM intensity
+        ldi r18, $0A                        ; Set MAX7219 intensity
         ldi r19, BOARD_V2_DIGIT_LOW
         rcall shiftBoth
         ret
 
-    boardv2_colons_on:
-        ldi r16, (1<<COM0A1|1<<WGM01|1<<WGM00)  ; Clear OC0A on Compare Match, set OC0A at TOP
-        out TCCR0A, r16
-        ret
-
-    boardv2_colons_off:
-        ldi r16, (0<<COM0A1|1<<WGM01|1<<WGM00)  ; Normal port operation, OC0A disconnected
-        out TCCR0A, r16
-        ret
-
-     boardv2_colons_toggle:
-        in r16, TCCR0A
-        ldi r17, (1<<COM0A1)
+    // Toggle colon state
+    boardv2_colons_toggle:
+        in r16, PORTB
+        ldi r17, (1<<PORTB_COLONS)
         eor r16, r17
-        out TCCR0A, r16
+        out PORTB, r16
         ret
 
     // Use analog comparator to determine LDR state and adjust brightness
@@ -2552,7 +2560,7 @@ timingAdjust:
         ldi ZL, 0
         mov dLastPacketTime, ZL    // Zero seconds since last GPS packet
         #ifdef BOARD_V2
-            rcall boardv2_colons_on
+            sbi PORTB, PORTB_COLONS
         #else
             ldi ZL, 0b10000000
             sts fix, ZL             // Pre-load 'fix' with bit 7 on for decimal point (colon)
