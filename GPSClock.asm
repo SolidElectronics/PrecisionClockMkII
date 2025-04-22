@@ -17,11 +17,14 @@
 // These settings are only applicable to the new board version with digital brightness control.
 // If unset, the binary remains compatible with existing/old boards.
 #define BOARD_V2
-// Options for board v2
-#define BOARD_V2_PWM_LOW    32
-#define BOARD_V2_PWM_HIGH   128
-#define BOARD_V2_DIGIT_LOW  3
-#define BOARD_V2_DIGIT_HIGH 15
+// Brightness control options for board v2
+#define BOARD_V2_PWM_LOW    1
+#define BOARD_V2_PWM_HIGH   32
+#define BOARD_V2_DATE_DIGIT_LOW  2
+#define BOARD_V2_DATE_DIGIT_HIGH 12
+#define BOARD_V2_TIME_DIGIT_LOW  1
+#define BOARD_V2_TIME_DIGIT_HIGH 6
+
 
 // Show time in 12-hour format
 // #define TWELVE_HOUR
@@ -128,8 +131,8 @@ seconds decimal: 1 second
     #define PORTB_LD_DATE           6
     #define PORTB_COLONS            7
 
-    #define PORTD_GMT               3
-    #define PORTD_BST               4
+    #define PORTD_GMT               4
+    #define PORTD_BST               5
 #endif
 
 // Common
@@ -531,11 +534,6 @@ overflow1:
     // 1/100 seconds digit 9 -> 0 (10Hz)
     lds r19, fix            ; Update fixDisplay from 'fix' value.  fix is alternated every second in timingAdjust routine (when PPS signal present)
     sts fixDisplay, r19     ; Save back to fixDisplay memory location (this is the only place it gets set)
-
-    // Check and set brightness
-    #ifdef BOARD_V2
-        rcall boardv2_check_ldr
-    #endif
 
     // Update this digit to zero (lower digit just rolled over)
     clr dCentiSeconds
@@ -999,9 +997,8 @@ init:
         ldi r16, (1<<AIN0D | 1<<AIN1D)
         out DIDR, r16
 
-        // Start with both indicators on, will update to correct states when GPS data arrives.
-        sbi PORTD, PORTD_GMT
-        sbi PORTD, PORTD_BST
+        cbi PORTD, PORTD_GMT
+        cbi PORTD, PORTD_BST
     #endif
 
     // Zero out digit registers
@@ -1118,7 +1115,7 @@ init:
         lds r20,tenYears
 
         clr fullYears
-    
+
         yearLoop2:
         add fullYears,r21
         dec r20
@@ -1324,6 +1321,9 @@ main:
 ; -----------------------------------------------------------------------------
 ;   GPS DATA PROCESSING
 ; -----------------------------------------------------------------------------
+
+    // If we get here, we managed to read a valid GPRMC sentence from the GPS, either live or from battery.
+    // Received time/date values are stored in RAM
 
     ldi ZH, high(monthLookup*2)
     ldi ZL,  low(monthLookup*2)
@@ -2392,8 +2392,11 @@ send_hours:
         ldi r16, 255 - BOARD_V2_PWM_HIGH
         out OCR0A, r16                      ; Set PWM intensity
         ldi r18, $0A                        ; Set MAX7219 intensity
-        ldi r19, BOARD_V2_DIGIT_HIGH
-        rcall shiftBoth
+        ldi r19, BOARD_V2_DATE_DIGIT_HIGH
+        rcall shiftDate
+        ldi r18, $0A
+        ldi r19, BOARD_V2_TIME_DIGIT_HIGH
+        rcall shiftTime
         ret
 
     // Set display brightness low
@@ -2401,8 +2404,11 @@ send_hours:
         ldi r16, 255 - BOARD_V2_PWM_LOW
         out OCR0A, r16                      ; Set PWM intensity
         ldi r18, $0A                        ; Set MAX7219 intensity
-        ldi r19, BOARD_V2_DIGIT_LOW
-        rcall shiftBoth
+        ldi r19, BOARD_V2_DATE_DIGIT_LOW
+        rcall shiftDate
+        ldi r18, $0A
+        ldi r19, BOARD_V2_TIME_DIGIT_LOW
+        rcall shiftTime
         ret
 
     // Toggle colon state
@@ -2545,6 +2551,7 @@ shiftBoth:
 ; -----------------------------------------------------------------------------
 ; Calibrate interpolated centiseconds to match the 1PPS output
 ; This is an interrupt service routine triggered by the PPS input.
+
 timingAdjust:
     push ZH
     push ZL
