@@ -2382,54 +2382,7 @@ send_hours:
         ret
     #endif
 
-; -----------------------------------------------------------------------------
-; FUNCTION DEFINITIONS FOR V2 BOARD
-; -----------------------------------------------------------------------------
 
-#ifdef BOARD_V2
-    // Set display brightness high
-    boardv2_brightness_high:
-        ldi r16, 255 - BOARD_V2_PWM_HIGH
-        out OCR0A, r16                      ; Set PWM intensity
-        ldi r18, $0A                        ; Set MAX7219 intensity
-        ldi r19, BOARD_V2_DATE_DIGIT_HIGH
-        rcall shiftDate
-        ldi r18, $0A
-        ldi r19, BOARD_V2_TIME_DIGIT_HIGH
-        rcall shiftTime
-        ret
-
-    // Set display brightness low
-    boardv2_brightness_low:
-        ldi r16, 255 - BOARD_V2_PWM_LOW
-        out OCR0A, r16                      ; Set PWM intensity
-        ldi r18, $0A                        ; Set MAX7219 intensity
-        ldi r19, BOARD_V2_DATE_DIGIT_LOW
-        rcall shiftDate
-        ldi r18, $0A
-        ldi r19, BOARD_V2_TIME_DIGIT_LOW
-        rcall shiftTime
-        ret
-
-    // Toggle colon state
-    boardv2_colons_toggle:
-        in r16, PORTB
-        ldi r17, (1<<PORTB_COLONS)
-        eor r16, r17
-        out PORTB, r16
-        ret
-
-    // Use analog comparator to determine LDR state and adjust brightness
-    boardv2_check_ldr:
-        in r16, ACSR
-        sbrs r16, ACO
-        rjmp boardv2_check_ldr_low
-        rcall boardv2_brightness_high
-        ret
-        boardv2_check_ldr_low:
-        rcall boardv2_brightness_low
-        ret
-#endif
 
 ; -----------------------------------------------------------------------------
 ;   MAX7219 driver
@@ -2546,84 +2499,14 @@ shiftBoth:
     nop
     ret
 
-; -----------------------------------------------------------------------------
-;   Timing adjustments
-; -----------------------------------------------------------------------------
-; Calibrate interpolated centiseconds to match the 1PPS output
-; This is an interrupt service routine triggered by the PPS input.
-
-timingAdjust:
-    push ZH
-    push ZL
-    clr ZH
-    out TCNT1H,ZH
-    out TCNT1L,ZH
-
-    // This is what causes the colons to blink, and only runs when a valid PPS signal is present, triggering this ISR.
-    // Display routine loads 'fix' value into 'fixDisplay' and uses that to control whether the decimal points driving the colons are on or off.
-    // Changes state of 'fix' in memory every time this routine gets called.  Alternates between 0 and 0b10000000 to set decimal point driver connected to colon LEDs
-    #ifdef COLONS_ON_FIX
-        // Colons always on when fix present in COLONS_ON_FIX mode
-        ldi ZL, 0
-        mov dLastPacketTime, ZL    // Zero seconds since last GPS packet
-        #ifdef BOARD_V2
-            sbi PORTB, PORTB_COLONS
-        #else
-            ldi ZL, 0b10000000
-            sts fix, ZL             // Pre-load 'fix' with bit 7 on for decimal point (colon)
-        #endif
-    # else
-        // Toggle colons
-        #ifdef BOARD_V2
-            #ifndef DISABLE_BLINKING_ENTIRELY
-                rcall boardv2_colons_toggle
-            #endif
-        #else
-            lds ZL,fix          ; Load current fix value
-            lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
-            eor ZL,ZH           ; XOR toggles
-            sts fix,ZL          ; Save to RAM
-        #endif
-    #endif
-
-    cpi dDeciSeconds, 5
-    brcc timingSlow
-
-timingFast:
-    in ZL, OCR1AL
-    in ZH, OCR1AH
-    adiw ZH : ZL, 1
-    out OCR1AH, ZH
-    out OCR1AL, ZL
-    ldi dDeciSeconds,0 
-    ldi dCentiSeconds,0
-
-    pop ZL
-    pop ZH
-    out SREG, r15
-    reti
-
-timingSlow:
-    in ZL, OCR1AL
-    in ZH, OCR1AH
-    sbiw ZH : ZL, 1
-    out OCR1AH, ZH
-    out OCR1AL, ZL
-    ldi dDeciSeconds,9 
-    ldi dCentiSeconds,9
-
-    ldi ZH, 1<<OCF0A
-    out TIFR, ZH
-
-    pop ZL
-    pop ZH
-    rjmp rollover
 
 ; -----------------------------------------------------------------------------
 ; LOOKUP TABLES
 ; -----------------------------------------------------------------------------
 
-;.org 0x700     ; 256 bytes before end of memory
+; 256 bytes before end of memory - page aligned for easier lookups
+; Table is 97 bytes so next possible memory location would be 865
+.org (768)
 
 monthLookup:
     ; 0 = december, 1 = january ... 12 = december
@@ -2747,3 +2630,133 @@ monthLookup:
         DSTEndMonth:
         .db $24,$29,$28,$27,$26,$24,$30,$29,$28,$26,$25,$24,$30,$28,$27,$26,$25,$30,$29,$28,$27,$25,$24,$30,$29,$27,$26,$25,$24,$29,$28,$27,$26,$24,$30,$29,$28,$26,$25,$24,$30,$28,$27,$26,$25,$30,$29,$28,$27,$25,$24,$30,$29,$27,$26,$25,$24,$29,$28,$27,$26,$24,$30,$29,$28,$26,$25,$24,$30,$28,$27,$26,$25,$30,$29,$28,$27,$25,$24,$30,$29,$27,$26,$25,$24
     #endif
+
+
+
+; Ran out of code space to put everything into the lower 768 bytes before the lookup table.
+; Leaving 128 bytes for the table, we still have another 128 before memory end.
+; May need to move more code down here if we start seeing "Overlap in .cseg" compiler errors.
+.org (896)
+
+; -----------------------------------------------------------------------------
+; FUNCTION DEFINITIONS FOR V2 BOARD
+; -----------------------------------------------------------------------------
+
+#ifdef BOARD_V2
+    // Set display brightness high
+    boardv2_brightness_high:
+        ldi r16, 255 - BOARD_V2_PWM_HIGH
+        out OCR0A, r16                      ; Set PWM intensity
+        ldi r18, $0A                        ; Set MAX7219 intensity
+        ldi r19, BOARD_V2_DATE_DIGIT_HIGH
+        rcall shiftDate
+        ldi r18, $0A
+        ldi r19, BOARD_V2_TIME_DIGIT_HIGH
+        rcall shiftTime
+        ret
+
+    // Set display brightness low
+    boardv2_brightness_low:
+        ldi r16, 255 - BOARD_V2_PWM_LOW
+        out OCR0A, r16                      ; Set PWM intensity
+        ldi r18, $0A                        ; Set MAX7219 intensity
+        ldi r19, BOARD_V2_DATE_DIGIT_LOW
+        rcall shiftDate
+        ldi r18, $0A
+        ldi r19, BOARD_V2_TIME_DIGIT_LOW
+        rcall shiftTime
+        ret
+
+    // Toggle colon state
+    boardv2_colons_toggle:
+        in r16, PORTB
+        ldi r17, (1<<PORTB_COLONS)
+        eor r16, r17
+        out PORTB, r16
+        ret
+
+    // Use analog comparator to determine LDR state and adjust brightness
+    boardv2_check_ldr:
+        in r16, ACSR
+        sbrs r16, ACO
+        rjmp boardv2_check_ldr_low
+        rcall boardv2_brightness_high
+        ret
+        boardv2_check_ldr_low:
+        rcall boardv2_brightness_low
+        ret
+#endif
+
+
+; -----------------------------------------------------------------------------
+;   Timing adjustments
+; -----------------------------------------------------------------------------
+; Calibrate interpolated centiseconds to match the 1PPS output
+; This is an interrupt service routine triggered by the PPS input.
+
+timingAdjust:
+    push ZH
+    push ZL
+    clr ZH
+    out TCNT1H,ZH
+    out TCNT1L,ZH
+
+    // This is what causes the colons to blink, and only runs when a valid PPS signal is present, triggering this ISR.
+    // Display routine loads 'fix' value into 'fixDisplay' and uses that to control whether the decimal points driving the colons are on or off.
+    // Changes state of 'fix' in memory every time this routine gets called.  Alternates between 0 and 0b10000000 to set decimal point driver connected to colon LEDs
+    #ifdef COLONS_ON_FIX
+        // Colons always on when fix present in COLONS_ON_FIX mode
+        ldi ZL, 0
+        mov dLastPacketTime, ZL    // Zero seconds since last GPS packet
+        #ifdef BOARD_V2
+            sbi PORTB, PORTB_COLONS
+        #else
+            ldi ZL, 0b10000000
+            sts fix, ZL             // Pre-load 'fix' with bit 7 on for decimal point (colon)
+        #endif
+    # else
+        // Toggle colons
+        #ifdef BOARD_V2
+            #ifndef DISABLE_BLINKING_ENTIRELY
+                rcall boardv2_colons_toggle
+            #endif
+        #else
+            lds ZL,fix          ; Load current fix value
+            lds ZH,dataValid    ; dataValid is initialized to zero, and set to 0b10000000 the first time a GPS fix is detected (unless #define DISABLE_BLINKING_ENTIRELY is set, in which case it's always zero)
+            eor ZL,ZH           ; XOR toggles
+            sts fix,ZL          ; Save to RAM
+        #endif
+    #endif
+
+    cpi dDeciSeconds, 5
+    brcc timingSlow
+
+timingFast:
+    in ZL, OCR1AL
+    in ZH, OCR1AH
+    adiw ZH : ZL, 1
+    out OCR1AH, ZH
+    out OCR1AL, ZL
+    ldi dDeciSeconds,0 
+    ldi dCentiSeconds,0
+
+    pop ZL
+    pop ZH
+    out SREG, r15
+    reti
+
+timingSlow:
+    in ZL, OCR1AL
+    in ZH, OCR1AH
+    sbiw ZH : ZL, 1
+    out OCR1AH, ZH
+    out OCR1AL, ZL
+    ldi dDeciSeconds,9 
+    ldi dCentiSeconds,9
+
+    ldi ZH, 1<<OCF0A
+    out TIFR, ZH
+
+    pop ZL
+    pop ZH
+    rjmp rollover
